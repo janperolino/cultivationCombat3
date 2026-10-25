@@ -20,8 +20,8 @@ Updated 2026-10-24. Checked means the stated deliverable is complete; unchecked 
 - [ ] **M1 — Prove multiplayer combat feasibility · In progress**
   - [x] M1.P1 — Separate shared simulation inputs and preserve solo combat behavior. Validated: 63 tests, type check, build.
   - [x] M1.P2 — Implement session authority, actor ownership, command validation, sequencing, and stale-input handling. 75 tests, type check, build, emitted module smoke; [handoff](phases/M1.P2-session-authority.md).
-  - [ ] M1.P3 — Select a development transport and connect two real clients to one authority. **Next implementation phase**
-  - [ ] M1.P4 — Replicate join snapshots, ordered state changes, and bounded terrain deltas.
+  - [x] M1.P3 — Select a development transport and connect two real clients to one authority. Loopback HTTP polling, 82 tests/type check/build, two-browser movement/cast/shared damage and terrain verification; [handoff](phases/M1.P3-local-transport.md).
+  - [ ] M1.P4 — Replicate join snapshots, ordered state changes, and bounded terrain deltas. **Next implementation phase**
   - [ ] M1.P5 — Add local prediction/reconciliation and remote interpolation; exercise latency, jitter, and loss.
   - [ ] M1.P6 — Handle disconnect, rejoin, idle actors, and host departure.
   - [ ] M1.P7 — Review two-client combat/terrain behavior, shared-clock Heavenly Step, and stack feasibility.
@@ -95,7 +95,7 @@ M0.P1 is complete: the existing combat study, design documents, and endorsed art
 
 Completed the opening chapter specification and art guide, saved the user-endorsed concept and its generation prompt, and started milestone 1's simulation input separation. `World.stepPlayers` accepts trusted per-actor inputs, prevents rival AI from overriding controlled actors, and uses one shared clock. Existing solo `World.step` retains its combat-study time dilation. Type checking, all 63 tests, and the static build pass.
 
-This is a simulation prerequisite, not a complete networked session. Transport, snapshots, client prediction, reconciliation, full reconnect recovery, terrain replication, ally teams/friendly-fire rules, and the two-real-client harness remain outstanding. M1.P2 supplies actor ownership/input validation and invalidates old command generations on host-managed reconnection. The current combat study does not yet render the painted concept or run the opening chapter. Next implementation work: the M1.P3 two-client transport spike; complete the remaining M1 integration gates before expanding chapter production.
+This is a simulation prerequisite, not a complete networked session. Production transport/hosting, ordered snapshots/deltas, client prediction, reconciliation, full reconnect recovery, production terrain replication, and ally teams/friendly-fire rules remain outstanding. M1.P3 adds a local two-real-client sparring harness with temporary full observation frames, not the complete replication protocol. M1.P2 supplies actor ownership/input validation and invalidates old command generations on host-managed reconnection. The current combat study does not yet render the painted concept or run the opening chapter. M1.P3 is complete: two local browser tabs control separate actors and observe shared authoritative outcomes through HTTP polling. 82 tests/type check/build and browser checks pass; see its [handoff](phases/M1.P3-local-transport.md). Next implementation work: M1.P4 ordered state/terrain replication; complete remaining M1 integration gates before expanding chapter production.
 
 ## Planning rules
 

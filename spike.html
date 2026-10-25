@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Severed Heaven · Two-player sparring</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#142426;color:#e3dcc6;font:15px system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:20px}header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{font-size:22px;margin:0}p{line-height:1.5;color:#b7c4b8}button{border:1px solid #7b9c88;background:#29443f;color:#fff0cc;border-radius:5px;padding:10px 16px;cursor:pointer}button:disabled{opacity:.45;cursor:default}#status{min-height:24px;color:#e8c488}canvas{display:block;width:min(100%,calc(100vh - 260px));min-width:280px;aspect-ratio:1;margin:14px auto;background:#31443b;border:1px solid #758879;touch-action:none}#readout{font-variant-numeric:tabular-nums;white-space:pre-wrap;min-height:45px}small{color:#9bb2a7}a{color:#c0e0ca}kbd{color:#fff0c0}
+</style></head><body><main>
+<header><div><small>SEVERED HEAVEN · LOCAL TWO-PLAYER TEST</small><h1>The sparring grounds</h1></div><div><button id="join">Join sparring</button> <button id="leave" disabled>Leave</button></div></header>
+<p>Open this address in two tabs and join each. Each tab controls a different cultivator. Sparring attacks can hurt the other player; cooperative team rules come later.</p>
+<div id="status" role="status">Ready to join · two seats available</div>
+<canvas id="arena" width="900" height="900" tabindex="0" aria-label="Shared sparring arena. WASD move, F rise, G descend, mouse aim, hold click to fire, Q slash, E falling heaven, Shift dodge."></canvas>
+<div id="readout" aria-live="off">Join to enter the shared arena.</div>
+<p><kbd>WASD</kbd> fly · <kbd>F / G</kbd> rise / descend · mouse aim · hold click / <kbd>1</kbd> bolts · <kbd>Q / 2</kbd> crescent · <kbd>E / 3</kbd> falling heaven · <kbd>Shift</kbd> dodge</p>
+<small>Jade: player 1 · amber: player 2 · white ring: you. No global slow during a dodge. Click the arena to focus controls; switching tabs clears held input. Leaving keeps the actor in the world. Restart the host for a fresh sparring match.</small>
+</main><script type="module" src="spike-client.js"></script></body></html>
