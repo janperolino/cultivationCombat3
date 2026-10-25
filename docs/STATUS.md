@@ -9,8 +9,8 @@ Full milestone and phase status checklist: [IMPLEMENTATION_PLAN.md](IMPLEMENTATI
 - Specifications: `docs/GAME_DESIGN.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/OPENING_CHAPTER.md`.
 - Playable build: combat study. Opening chapter and painted rendering are not yet implemented.
 - Latest code: `World.stepPlayers` supports trusted per-actor inputs on a shared clock. Existing solo behavior retained. This is M1.P1, not networked co-op.
-- Latest validation: 63 tests, TypeScript checking, static build passed on 2026-10-24 after the simulation change. Subsequent edits were documentation only.
-- Before further production changes: establish version control/backup (M0.P1); the workspace was not a Git repository at the last inspection.
+- Latest validation: 63 tests, TypeScript checking, and build passed on 2026-10-24 in both the original workspace and a bundle recovery clone; clean locked dependency installation passed in the clone. Gameplay unchanged in M0.P1.
+- M0.P1 complete: local Git baseline `943e923`; committed completion records and verified `backups/M0.P1-baseline.bundle`. Recovery coverage, exclusions, checks, and M1.P2 decision gate: [phase handoff](phases/M0.P1-baseline.md).
 - Next proposed implementation phase: M1.P2, session authority and command validation. Write its precise brief before starting.
 - Open technical decisions: target platform, transport/hosting, party size, actor/team rules, disconnect policies, and final multiplayer Heavenly Step behavior. Current shared-clock mode is a prototype direction.
-- Chat organization: no milestone or phase chats have been created. Current planning chat ID: `01a17000-ab53-7440-9602-5ac68322ba50`.
+- Chat organization: project hub `01a17000-ab53-7440-9602-5ac68322ba50`; M0.P1 implementation chat completed this phase. No M1.P2 work started.

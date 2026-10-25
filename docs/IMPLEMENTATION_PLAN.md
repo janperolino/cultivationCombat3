@@ -9,7 +9,7 @@ Concrete specifications: [opening chapter](OPENING_CHAPTER.md) · [art direction
 Updated 2026-10-24. Checked means the stated deliverable is complete; unchecked means work remains. **In progress**, **next**, and **planned** distinguish unfinished work. Milestones close only after their exit review. Later phases are provisional and will receive a precise brief before implementation; this checklist is the authoritative phase index.
 
 - [ ] **M0 — Agree on the game contract · In progress**
-  - [ ] M0.P1 — Establish version control and a recoverable backup baseline. **Next prerequisite**
+  - [x] M0.P1 — Establish version control and a recoverable backup baseline. Local Git commit, bundle restore/content verification, 63 tests, type check, and build; [handoff](phases/M0.P1-baseline.md).
   - [x] M0.P2 — Record the core game direction, sect restoration loop, and opening premise.
   - [x] M0.P3 — Write the opening chapter specification and initial restoration proposal.
   - [x] M0.P4 — Establish the art direction and save the user-endorsed concept.
@@ -91,6 +91,8 @@ Working rule: one bounded phase per implementation chat, with a brief, acceptanc
 
 ## Current work — 2026-10-24
 
+M0.P1 is complete: the existing combat study, design documents, and endorsed art are committed locally and recoverable from a verified bundle. Original and recovery-clone validation passed (63 tests, type check, build). M0 remains open; M1.P2 requires a precise brief and the decisions recorded in the [M0.P1 handoff](phases/M0.P1-baseline.md).
+
 Completed the opening chapter specification and art guide, saved the user-endorsed concept and its generation prompt, and started milestone 1's simulation input separation. `World.stepPlayers` accepts trusted per-actor inputs, prevents rival AI from overriding controlled actors, and uses one shared clock. Existing solo `World.step` retains its combat-study time dilation. Type checking, all 63 tests, and the static build pass.
 
 This is a simulation prerequisite, not a complete networked session. Transport, actor ownership/input validation, snapshots, client prediction, reconciliation, reconnect, terrain replication, ally teams/friendly-fire rules, and the two-real-client harness remain outstanding. The current combat study does not yet render the painted concept or run the opening chapter. Next implementation work: session authority and the two-client transport spike, then the chapter greybox and a small painted rendering slice.
@@ -111,7 +113,7 @@ Update, 2026-10-24: the user endorsed the design and confirmed a fallen sect hub
 - Terrain save version 2 supports migration from version 1; no complete character/world save.
 - Verification on 2026-10-24: `npm run check` and `npm test` pass, 60 tests.
 - `tools.mjs` explicitly lists built modules; adding modules requires updating the build or replacing that list deliberately.
-- The workspace has no Git repository. Establish version control and a backup baseline before production changes.
+- M0.P1 completed on 2026-10-24: local Git baseline and verified recovery bundle; see [coverage and recovery instructions](phases/M0.P1-baseline.md).
 
 ## Milestone 0 — Agree on the game contract
 
