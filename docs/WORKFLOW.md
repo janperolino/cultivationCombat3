@@ -51,7 +51,7 @@ Prerequisite M0.P1: establish version control/backup and resolve only decisions 
 | M1.P6 — Session recovery | Disconnect/rejoin, idle actors, host departure behavior | Defined recovery scenarios pass without duplicate effects or state grants |
 | M1.P7 — Integration review | Two-client combat/terrain demonstration and decision on the stack | Milestone 1 exit criteria reviewed, limitations recorded |
 
-Only M1.P1 is implemented. Transport, online play, friendly-fire/team policies, and complete session authority are not yet implemented. Reward persistence belongs to later milestones; the spike must not claim to validate inventory transactions that do not exist.
+M1.P1 and M1.P2 are implemented. M1.P2 validation: 75 tests, type check, build, and emitted authority module smoke; see its [handoff](phases/M1.P2-session-authority.md). Transport, online play, and friendly-fire/team policies are not yet implemented. Reward persistence belongs to later milestones; the spike must not claim to validate inventory transactions that do not exist.
 
 The full milestone/phase checklist in `docs/IMPLEMENTATION_PLAN.md` is the authoritative phase index. Later phase entries are provisional: refine their scope and split large entries shortly before starting them. The table above explains M1 rather than defining a second roadmap. The first painted courtyard slice is indexed as M4.P5, with the endorsed art guide and destruction/readability checks.
 
