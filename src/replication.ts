@@ -1,7 +1,7 @@
 import { GRID } from './sim.ts';
 import type { Actor, Cell, World } from './sim.ts';
 
-export const PROTOCOL_VERSION = 1, TERRAIN_SCHEMA = 'height-field-v2';
+export const PROTOCOL_VERSION = 2, TERRAIN_SCHEMA = 'height-field-v2';
 export const CELLS_PER_PAGE = 256, MAX_PACKET_BYTES = 64 * 1024;
 export type CellRow = [number, number, number, number, number, number];
 export type DisplayFrame = {
@@ -25,6 +25,27 @@ type Transfer = {
 };
 const integer = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
+export function captureDisplayFrame(world: World, tick: number, receipt: DisplayFrame['receipt'], droppedTime = 0): DisplayFrame {
+    return structuredClone({ tick, time: world.time, revision: world.revision, destroyed: world.destroyed,
+        actors: world.actors, receipt, droppedTime,
+        bolts: world.bolts.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, launched: b.launched })),
+        waves: world.waves.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, span: b.span, angle: b.angle })),
+        casts: world.casts.map(c => ({ x: c.x, y: c.y, z: c.z, owner: c.owner, radius: c.radius, left: c.left })),
+    });
+}
+export function validateDisplayFrame(s: DisplayFrame, previous?: DisplayFrame): void {
+    if (!s || !integer(s.tick) || s.tick < (previous?.tick ?? 0) || !integer(s.revision) ||
+        !finite(s.time) || !finite(s.droppedTime) || !integer(s.destroyed) ||
+        !s.receipt || !integer(s.receipt.received) || !integer(s.receipt.applied) || s.receipt.applied > s.receipt.received ||
+        s.receipt.received < (previous?.receipt.received ?? 0) || s.receipt.applied < (previous?.receipt.applied ?? 0) ||
+        !Array.isArray(s.actors) || s.actors.length !== 2 || new Set(s.actors.map(a => a.id)).size !== 2 ||
+        s.actors.some(a => ![0, 1].includes(a.id) || ![a.x, a.y, a.z, a.hp, a.qi, a.dashLeft, a.vx, a.vy, a.vz, a.aim, a.dashX, a.dashY, a.realm].every(finite) || !Array.isArray(a.cool)) ||
+        ![s.bolts, s.waves, s.casts].every(a => Array.isArray(a) && a.length <= 512 &&
+            a.every(b => [b.x, b.y, b.z].every(finite) && [0, 1].includes(b.owner))) ||
+        s.bolts.some(b => typeof b.launched !== 'boolean') ||
+        s.waves.some(b => ![b.span, b.angle].every(finite) || b.span < 0) ||
+        s.casts.some(c => ![c.radius, c.left].every(finite) || c.radius < 0)) throw new Error('Invalid state frame');
+}
 export function serializePage(page: StatePage): string {
     const data = JSON.stringify(page);
     if (new TextEncoder().encode(data).length > MAX_PACKET_BYTES) throw new Error('Replication packet budget exceeded');
@@ -142,18 +163,9 @@ export class ReplicaClient {
         if (rows.length > page.total || page.final !== (rows.length === page.total) ||
             (!page.final && (!page.cells.length || page.state !== undefined))) throw new Error('Invalid transfer boundary');
         if (page.final) {
-            const s = page.state;
-            if (!s || !integer(s.tick) || s.tick < (this.state?.tick ?? 0) || s.revision !== page.revision ||
-                !finite(s.time) || !finite(s.droppedTime) || !integer(s.destroyed) ||
-                !s.receipt || !integer(s.receipt.received) || !integer(s.receipt.applied) || s.receipt.applied > s.receipt.received ||
-                s.receipt.received < (this.state?.receipt.received ?? 0) || s.receipt.applied < (this.state?.receipt.applied ?? 0) ||
-                !Array.isArray(s.actors) || s.actors.length !== 2 || new Set(s.actors.map(a => a.id)).size !== 2 ||
-                s.actors.some(a => ![0, 1].includes(a.id) || ![a.x, a.y, a.z, a.hp, a.qi, a.dashLeft].every(finite)) ||
-                ![s.bolts, s.waves, s.casts].every(a => Array.isArray(a) && a.length <= 512 &&
-                    a.every(b => [b.x, b.y, b.z].every(finite) && [0, 1].includes(b.owner))) ||
-                s.bolts.some(b => typeof b.launched !== 'boolean') ||
-                s.waves.some(b => ![b.span, b.angle].every(finite) || b.span < 0) ||
-                s.casts.some(c => ![c.radius, c.left].every(finite) || c.radius < 0)) throw new Error('Invalid state frame');
+            const s = page.state!;
+            validateDisplayFrame(s!, this.state);
+            if (s!.revision !== page.revision) throw new Error('State/terrain revision mismatch');
             const cells = page.kind === 'snapshot' ? new Array<Cell>(GRID * GRID) : this.cells.slice();
             for (const [i, kind, hp, max, depth, elevation] of rows) cells[i] = { kind, hp, max, depth, elevation };
             this.cells = cells; this.state = structuredClone(s); this.revision = page.revision; this.staged = undefined;

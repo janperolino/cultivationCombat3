@@ -180,3 +180,15 @@ test('HTTP sync retries identical pages, rejects gaps/versions, and recovers a n
     assert.equal(client.revision, h.world.revision);
     assert.equal((await h.api('sync', a, initial)).status, 409);
 });
+
+test('authenticated live frames progress during a pinned terrain transfer without advancing its acknowledgment', async t => {
+    const h = await host(t), a = await h.join(), client = new ReplicaClient(a.sessionId);
+    const initial = client.request(), first = await h.api('sync', a, initial);
+    h.step(); h.world.terrain({ x: 232, y: 256 }, 10, 300);
+    assert.equal((await h.api('live')).status, 401);
+    const live = await h.api('live', a);
+    assert.equal(live.status, 200); assert.equal(live.data.sessionId, a.sessionId);
+    assert.equal(live.data.state.tick, 1); assert.equal(live.data.state.revision, 1);
+    assert.deepEqual((await h.api('sync', a, initial)).data, first.data);
+    assert.ok(Buffer.byteLength(JSON.stringify(live.data)) < 64 * 1024);
+});

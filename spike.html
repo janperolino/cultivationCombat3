@@ -6,6 +6,7 @@
 </style></head><body><main>
 <header><div><small>SEVERED HEAVEN · LOCAL TWO-PLAYER TEST</small><h1>The sparring grounds</h1></div><div><button id="join">Join sparring</button> <button id="leave" disabled>Leave</button></div></header>
 <p>Open this address in two tabs and join each. Each tab controls a different cultivator. Sparring attacks can hurt the other player; cooperative team rules come later.</p>
+<label>Network test <select id="network"><option value="local">Local</option><option value="mild">50 ms RTT · jitter · 1% message loss</option><option value="typical">100 ms RTT · jitter · 2% message loss</option><option value="harsh">150 ms RTT · jitter · 3% message loss</option></select></label>
 <div id="status" role="status">Ready to join · two seats available</div>
 <canvas id="arena" width="900" height="900" tabindex="0" aria-label="Shared sparring arena. WASD move, F rise, G descend, mouse aim, hold click to fire, Q slash, E falling heaven, Shift dodge."></canvas>
 <div id="readout" aria-live="off">Join to enter the shared arena.</div>

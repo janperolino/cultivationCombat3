@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { World, DT } from '../src/sim.ts';
 import { SessionAuthority } from '../src/session-authority.ts';
-import { ReplicationStream, PROTOCOL_VERSION, TERRAIN_SCHEMA, MAX_PACKET_BYTES } from '../src/replication.ts';
+import { ReplicationStream, PROTOCOL_VERSION, TERRAIN_SCHEMA, MAX_PACKET_BYTES, captureDisplayFrame } from '../src/replication.ts';
 
 export const BODY_LIMIT = 2048, FRAME_LIMIT = MAX_PACKET_BYTES, LEASE_MS = 5000;
 const token = () => randomBytes(24).toString('hex');
@@ -14,6 +14,8 @@ const assets = new Map([
     ['/sim.js', ['sim.js', 'text/javascript']], ['/time-flow.js', ['time-flow.js', 'text/javascript']],
     ['/targeting.js', ['targeting.js', 'text/javascript']],
     ['/replication.js', ['replication.js', 'text/javascript']],
+    ['/client-motion.js', ['client-motion.js', 'text/javascript']],
+    ['/network-lab.js', ['network-lab.js', 'text/javascript']],
 ]);
 
 // Exported for real HTTP integration tests. Only the local host owns this World.
@@ -31,17 +33,14 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
     }
     function step() { expire(); authority.step(); }
     function frame(clientId) {
-        return { tick: authority.tick, time: world.time,
-            revision: world.revision, destroyed: world.destroyed, actors: world.actors,
-            bolts: world.bolts.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, launched: b.launched })),
-            waves: world.waves.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, span: b.span, angle: b.angle })),
-            casts: world.casts.map(c => ({ x: c.x, y: c.y, z: c.z, owner: c.owner, radius: c.radius, left: c.left })),
-            receipt: authority.receipt(clientId), droppedTime };
+        return captureDisplayFrame(world, authority.tick, authority.receipt(clientId), droppedTime);
     }
     function send(res, status, data) {
+        const text = typeof data === 'string' ? data : JSON.stringify(data);
+        if (Buffer.byteLength(text) > FRAME_LIMIT) throw new Error('Response budget exceeded');
         res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff' });
-        res.end(typeof data === 'string' ? data : JSON.stringify(data));
+        res.end(text);
     }
     async function json(req) {
         if (req.headers['content-type'] !== 'application/json') throw { status: 415, error: 'JSON required' };
@@ -92,6 +91,9 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
             if (!c) { send(res, 401, { error: 'Connection expired. Join again.' }); return; }
             if (now() - c.window >= 1000) { c.window = now(); c.count = 0; }
             if (++c.count > 100) { send(res, 429, { error: 'Connection ingress limit' }); return; }
+            if (path === '/api/live' && req.method === 'GET') {
+                c.seen = now(); send(res, 200, { protocol: PROTOCOL_VERSION, schema: TERRAIN_SCHEMA, sessionId, state: frame(c.id) }); return;
+            }
             if (path === '/api/sync' && req.method === 'POST') {
                 const body = await json(req);
                 if (clients.get(secret) !== c || now() - c.seen >= LEASE_MS) {
