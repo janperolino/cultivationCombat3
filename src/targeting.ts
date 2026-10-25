@@ -9,7 +9,9 @@ export type TargetCandidate = {
     ground: Vec;
 };
 export const ASSIST_RADIUS = 84, ASSIST_RANGE = 180, LOCK_RANGE = 220;
-export function targetInRange(shooter: Actor, target: Actor, range: number) { return target.id !== shooter.id && target.hp > 0 && Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z) <= range; }
+export function targetInRange(shooter: Actor, target: Actor, range: number) { return target.id !== shooter.id && target.hp > 0 &&
+    (shooter.team === undefined || target.team === undefined || shooter.team !== target.team) &&
+    Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z) <= range; }
 function segmentDistance(p: Vec, a: Vec, b: Vec) { const dx = b.x - a.x, dy = b.y - a.y, n = dx * dx + dy * dy, t = n ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / n)) : 0; return Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t); }
 export function cursorTarget(shooter: Actor, mouse: Vec, candidates: TargetCandidate[], radius = ASSIST_RADIUS) { let best: Actor | undefined, score = radius; for (const c of candidates) {
     if (!targetInRange(shooter, c.actor, ASSIST_RANGE))

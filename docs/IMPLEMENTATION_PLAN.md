@@ -17,14 +17,17 @@ Updated 2026-10-24. Checked means the stated deliverable is complete; unchecked 
   - [ ] M0.P6 — Resolve initial co-op scope, world ownership, death rules, and technical constraints.
   - [ ] M0.P7 — Review and agree on the bounded first playable scope and deferred systems.
 
-- [ ] **M1 — Prove multiplayer combat feasibility · In progress**
+- [x] **M1 — Prove multiplayer combat feasibility · Complete (bounded local prototype accepted 2026-10-24)**
   - [x] M1.P1 — Separate shared simulation inputs and preserve solo combat behavior. Validated: 63 tests, type check, build.
   - [x] M1.P2 — Implement session authority, actor ownership, command validation, sequencing, and stale-input handling. 75 tests, type check, build, emitted module smoke; [handoff](phases/M1.P2-session-authority.md).
   - [x] M1.P3 — Select a development transport and connect two real clients to one authority. Loopback HTTP polling, 82 tests/type check/build, two-browser movement/cast/shared damage and terrain verification; [handoff](phases/M1.P3-local-transport.md).
   - [x] M1.P4 — Replicate join snapshots, ordered state changes, and bounded terrain deltas. 92 tests/type check/build, full-world paging/retry/resync checks and two-browser late join; [handoff](phases/M1.P4-state-replication.md).
   - [x] M1.P5 — Add local prediction/reconciliation and remote interpolation; exercise latency, jitter, and loss. 101 tests/type check/build, seeded profiles and two impaired browser clients; [measurements and limits](phases/M1.P5-responsive-clients.md).
-  - [ ] M1.P6 — Handle disconnect, rejoin, idle actors, and host departure. **Next implementation phase**
-  - [ ] M1.P7 — Review two-client combat/terrain behavior, shared-clock Heavenly Step, and stack feasibility.
+  - [x] M1.P6 — Handle disconnect, rejoin, idle actors, and host departure. Bounded 30-second reservation, fresh-generation snapshot recovery, 106 tests/type check/build and two-browser recovery/restart checks; [handoff](phases/M1.P6-session-recovery.md).
+  - [x] M1.P7 — Review two-client combat/terrain behavior, shared-clock Heavenly Step, and stack feasibility. Initial review identified common-enemy/action/responsiveness gaps; these were resolved in M1.P8–P10. Historical 106-test [review](phases/M1.P7-integration-review.md).
+  - [x] M1.P8 — Implement bounded reliable cast/dodge delivery across loss, reordering, expiry and recovery. [Handoff](phases/M1.P8-reliable-actions.md).
+  - [x] M1.P9 — Demonstrate both allied players damaging the shared stationary sentinel, with host-owned teams and no friendly fire. [Handoff](phases/M1.P9-shared-target.md).
+  - [x] M1.P10 — Meet agreed scoped responsiveness budgets; review integrated shared-clock combat/terrain and obtain user bounded-prototype acceptance. 117 tests/check/build, seeded and real-client checks plus load diagnostic; no independent two-human playtest claim. [Final review](phases/M1.P10-responsiveness-review.md).
 
 - [ ] **M2 — Turn the arena into an encounter · Planned**
   - [ ] M2.P1 — Define reusable technique, enemy, and encounter data with validation.
@@ -91,11 +94,13 @@ Working rule: one bounded phase per implementation chat, with a brief, acceptanc
 
 ## Current work — 2026-10-24
 
-M0.P1 is complete: the existing combat study, design documents, and endorsed art are committed locally and recoverable from a verified bundle. Original and recovery-clone validation passed (63 tests, type check, build). M0 remains open. M1.P2 is now complete under the bounded rules in its [brief and handoff](phases/M1.P2-session-authority.md): two assigned actors, validated sequenced inputs, connection generations, and stale/disconnected neutral control. All 75 tests, type check, build, and emitted-module smoke pass.
+M1 is complete at the bounded local feasibility boundary, following the user's explicit acceptance of the prototype, numerical targets and no-friendly-fire test rule. Two allied browser clients move/cast, damage a shared stationary sentinel and terrain, recover without state/action grants, and use one authoritative combat clock. Reliable discrete actions, protocol-3 replication and tuned motion buffering resolve the gaps identified in M1.P7. All 117 tests, type check, build, scoped seeded budgets and real-client checks pass; see [M1.P10 final review](phases/M1.P10-responsiveness-review.md).
 
-Completed the opening chapter specification and art guide, saved the user-endorsed concept and its generation prompt, and started milestone 1's simulation input separation. `World.stepPlayers` accepts trusted per-actor inputs, prevents rival AI from overriding controlled actors, and uses one shared clock. Existing solo `World.step` retains its combat-study time dilation. Type checking, all 63 tests, and the static build pass.
+The overhead harness is intentionally minimal network-test presentation. The user flagged that it does not look like the original study; that renderer is preserved under `npm run dev` but has not been connected to multiplayer. Carry integration of the study's presentation into the next milestone brief. This acceptance does not approve the harness as the final game look. No M2 work has started.
 
-This is a simulation prerequisite, not a complete networked session. Production transport/hosting, full reconnect recovery, and ally teams/friendly-fire rules remain outstanding. M1.P5 adds bounded local motion prediction/reconciliation, remote interpolation, independent live observations, and repeatable network-condition measurements. Its reported stalls/corrections require M1.P7 review; predicted attacks and reliable discrete actions remain open. M1.P4 replaces the temporary M1.P3 observations with versioned join snapshots, ordered acknowledged pages, bounded absolute terrain deltas, atomic commits, and retry/resync handling. Attack arrays remain current-state observations; durable transient event replay is not implemented. M1.P2 supplies actor ownership/input validation and invalidates old command generations on host-managed reconnection. The current combat study does not yet render the painted concept or run the opening chapter. M1.P3 is complete: two local browser tabs control separate actors and observe shared authoritative outcomes through HTTP polling. 82 tests/type check/build and browser checks pass; see its [handoff](phases/M1.P3-local-transport.md). M1.P4 is also complete: 92 tests/type check/build, whole-world paging/recovery verification, and two-browser late join agree on terrain scars. See its [replication handoff](phases/M1.P4-state-replication.md). M1.P5 is complete: 101 tests/type check/build plus seeded and real-browser impairment checks; [handoff and tuning limits](phases/M1.P5-responsive-clients.md). Next implementation work: M1.P6 session recovery; complete remaining M1 integration gates before expanding chapter production.
+Retain TypeScript/Canvas for the next prototype. Local HTTP is a development transport, not proof of production platform/hosting, NAT/relay/account security or arbitrary internet performance. Campaign/team/death/ownership policy, a universal solo/network authority interface, complete restorable simulation/RNG state, durable events and inventory/reward persistence remain deferred. The common target is stationary, not an M2 enemy encounter. No independent two-human playtest or production combat-feel certification is claimed.
+
+M0.P1's original Git/bundle baseline remains verified, but these newer changes are local and uncommitted and are not covered by that old bundle. No push, publishing or deployment was performed. Stop at M1 until further work is selected.
 
 ## Planning rules
 
@@ -143,6 +148,8 @@ Decision gate: continue the browser stack if acceptable. Consider a renderer/eng
 ## Milestone 2 — Turn the arena into an encounter
 
 Dependencies: multiplayer authority stable enough for repeated play.
+
+Planning note from M1 closure: connect the original study presentation to network-driven actors before presenting the top-down test harness as representative gameplay. Preserve its rendering work; painted production art remains M4. Define the next bounded phase before implementation.
 
 Deliver: data-defined encounters and techniques; multiple enemies; enemy perception, navigation/altitude handling, telegraphed attacks, leash/reset, encounter completion, revive/recovery, and a boss with multiple targets. Add two mechanically distinct build variants using a limited technique set.
 

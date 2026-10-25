@@ -72,7 +72,7 @@ test('remote interpolation buffers ordered samples, takes the shortest angle, an
     r.push(captureDisplayFrame(w, 10, { received: 0, applied: 0 }));
     w.actors[1].x = 200; w.actors[1].aim = -Math.PI + .1;
     r.push(captureDisplayFrame(w, 20, { received: 0, applied: 0 }));
-    const middle = r.sample(27)[1]; // 200 ms buffer: target tick 15.
+    const middle = r.sample(24)[1]; // 150 ms buffer: target tick 15.
     assert.equal(middle.x, 150); assert.ok(Math.abs(middle.aim - Math.PI) < 1e-9);
     assert.equal(r.sample(0)[1].x, 100); assert.equal(r.sample(1000)[1].x, 200);
     r.push(captureDisplayFrame(w, 1, { received: 0, applied: 0 })); assert.equal(r.size, 2);
@@ -90,4 +90,17 @@ test('network profiles are seeded, bounded, and independently impair both messag
     assert.ok(dropped > 400 && dropped < 800);
     const local = new NetworkLab().next(); assert.equal(local.up + local.down, 0);
     assert.equal(local.dropRequest || local.dropResponse, false);
+});
+
+test('measured motion buffering delays a reversal while preserving resources and collision authority', () => {
+    const { w, p } = setup();
+    const idleFrame = captureDisplayFrame(w, 1, { received: 0, applied: 0 });
+    p.reconcile(idleFrame, p.tick, 4);
+    assert.equal(p.bufferTicks, 4);
+    for (let i = 0; i < 4; i++) p.advance({ ...idle, move: { x: 1, y: 0 }, fire: 'nova', dash: true });
+    assert.equal(p.actor!.x, 100);
+    p.advance({ ...idle, move: { x: 1, y: 0 } });
+    assert.ok(p.actor!.x > 100); assert.equal(p.actor!.qi, 100); assert.equal(p.actor!.dashLeft, 0);
+    p.reconcile(captureDisplayFrame(w, 2, { received: 0, applied: 0 }), p.tick, 100);
+    assert.equal(p.bufferTicks, 8);
 });

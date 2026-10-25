@@ -11,8 +11,10 @@ test('seeded two-client 50–150 ms RTT scenarios converge with bounded history,
         assert.equal(result.sharedClock, true, profile);
         assert.equal(result.historyBounded, true, profile);
         // Regression envelope for this deterministic clear-arena workload, not universal budgets.
-        assert.ok(result.p95ErrorM <= 3.1 && result.maxErrorM <= 10, JSON.stringify(result));
-        assert.ok(result.maxCorrectionM <= 11 && result.maxStateAgeMs <= 700, profile);
+        const p95Budget = profile === 'harsh' ? 2 : 1;
+        assert.ok(result.p95ErrorM <= p95Budget, JSON.stringify(result));
+        assert.ok(result.maxCorrectionM <= 3 && result.maxStateAgeMs <= 400, profile);
+        assert.ok(result.wholeWorldDeltaCatchupSeconds <= 5, profile);
         if (profile !== 'local') assert.ok(result.droppedTransactions > 0);
     }
 });

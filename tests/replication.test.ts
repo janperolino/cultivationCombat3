@@ -39,6 +39,17 @@ test('late join reconstructs every field of every damaged terrain cell in bounde
     assert.equal(client.syncing, false);
 });
 
+test('terrain pages shrink below the cell cap when numeric row encodings approach the byte budget', () => {
+    const { world, stream, client } = setup();
+    world.cells.forEach(c => Object.assign(c, { hp: Number.MAX_VALUE, max: Number.MAX_VALUE, elevation: -Number.MAX_VALUE, depth: 12 }));
+    const first = stream.reply(client.request());
+    assert.ok(first.cells.length < CELLS_PER_PAGE);
+    assert.ok(Buffer.byteLength(serializePage(first)) <= MAX_PACKET_BYTES);
+    const pages = transfer(stream, client);
+    assert.ok(pages.length > GRID * GRID / CELLS_PER_PAGE);
+    assert.deepEqual(client.cells, world.cells);
+});
+
 test('snapshot is atomic and mutations while paging arrive in the next delta', () => {
     const { world, stream, client } = setup();
     const first = stream.reply(client.request()); client.apply(first);

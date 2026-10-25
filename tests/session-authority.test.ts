@@ -114,7 +114,7 @@ test('sequencing rejects replay, backward, zero, and excessive jumps without poi
     assert.equal(a.submit('alice', command(g, 2 + MAX_SEQUENCE_GAP)).accepted, true);
 });
 
-test('intake is bounded per owner and tick; latest input coalesces without queued action bursts', () => {
+test('intake is bounded per owner and tick; latest motion cannot erase accepted one-shots', () => {
     const { authority: a, generation: g, otherGeneration: b, world } = setup();
     for (let seq = 1; seq <= MAX_COMMANDS_PER_TICK; seq++) {
         assert.equal(a.submit('alice', command(g, seq, 0, seq === 1 ? { ...idle, fire: 'bolt', dash: true } : idle)).accepted, true);
@@ -122,8 +122,8 @@ test('intake is bounded per owner and tick; latest input coalesces without queue
     rejected(a.submit('alice', command(g, 5)), 'rate-limit');
     assert.equal(a.submit('bob', command(b, 1, 1)).accepted, true);
     a.step();
-    assert.equal(world.bolts.length, 0);
-    assert.equal(world.actors[0].dashLeft, 0);
+    assert.equal(world.bolts.length, 5);
+    assert.ok(world.actors[0].dashLeft > 0);
     assert.equal(a.submit('alice', command(g, 5)).accepted, true);
 });
 

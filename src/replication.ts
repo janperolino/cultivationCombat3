@@ -1,8 +1,9 @@
 import { GRID } from './sim.ts';
 import type { Actor, Cell, World } from './sim.ts';
+import type { InputReceipt } from './session-authority.ts';
 
-export const PROTOCOL_VERSION = 2, TERRAIN_SCHEMA = 'height-field-v2';
-export const CELLS_PER_PAGE = 256, MAX_PACKET_BYTES = 64 * 1024;
+export const PROTOCOL_VERSION = 3, TERRAIN_SCHEMA = 'height-field-v2';
+export const CELLS_PER_PAGE = 1024, MAX_PACKET_BYTES = 64 * 1024;
 export type CellRow = [number, number, number, number, number, number];
 export type DisplayFrame = {
     tick: number; time: number; revision: number; destroyed: number; droppedTime: number;
@@ -10,7 +11,7 @@ export type DisplayFrame = {
     bolts: { x: number; y: number; z: number; owner: number; launched: boolean }[];
     waves: { x: number; y: number; z: number; owner: number; span: number; angle: number }[];
     casts: { x: number; y: number; z: number; owner: number; radius: number; left: number }[];
-    receipt: { received: number; applied: number };
+    receipt: InputReceipt;
 };
 export type SyncRequest = {
     protocol: number; schema: string; sessionId: string; syncId: number; ack: number;
@@ -38,10 +39,16 @@ export function validateDisplayFrame(s: DisplayFrame, previous?: DisplayFrame): 
         !finite(s.time) || !finite(s.droppedTime) || !integer(s.destroyed) ||
         !s.receipt || !integer(s.receipt.received) || !integer(s.receipt.applied) || s.receipt.applied > s.receipt.received ||
         s.receipt.received < (previous?.receipt.received ?? 0) || s.receipt.applied < (previous?.receipt.applied ?? 0) ||
-        !Array.isArray(s.actors) || s.actors.length !== 2 || new Set(s.actors.map(a => a.id)).size !== 2 ||
-        s.actors.some(a => ![0, 1].includes(a.id) || ![a.x, a.y, a.z, a.hp, a.qi, a.dashLeft, a.vx, a.vy, a.vz, a.aim, a.dashX, a.dashY, a.realm].every(finite) || !Array.isArray(a.cool)) ||
+        ((previous?.receipt.actionReceived ?? 0) > 0 && s.receipt.actionReceived === undefined) ||
+        (s.receipt.actionReceived !== undefined && (!integer(s.receipt.actionReceived) || !integer(s.receipt.actionApplied) ||
+            s.receipt.actionApplied > s.receipt.actionReceived || s.receipt.actionReceived < (previous?.receipt.actionReceived ?? 0) ||
+            s.receipt.actionApplied < (previous?.receipt.actionApplied ?? 0) || !Array.isArray(s.receipt.outcomes) || s.receipt.outcomes.length > 32 ||
+            s.receipt.outcomes.some(o => !integer(o.sequence) || o.sequence > s.receipt.actionApplied! || !['consumed', 'expired'].includes(o.status)))) ||
+        !Array.isArray(s.actors) || s.actors.length < 2 || s.actors.length > 3 || new Set(s.actors.map(a => a.id)).size !== s.actors.length ||
+        !s.actors.some(a => a.id === 0) || !s.actors.some(a => a.id === 1) ||
+        s.actors.some(a => ![0, 1, 2].includes(a.id) || (a.team !== undefined && !integer(a.team)) || ![a.x, a.y, a.z, a.hp, a.qi, a.dashLeft, a.vx, a.vy, a.vz, a.aim, a.dashX, a.dashY, a.realm].every(finite) || !Array.isArray(a.cool)) ||
         ![s.bolts, s.waves, s.casts].every(a => Array.isArray(a) && a.length <= 512 &&
-            a.every(b => [b.x, b.y, b.z].every(finite) && [0, 1].includes(b.owner))) ||
+            a.every(b => [b.x, b.y, b.z].every(finite) && s.actors.some(a => a.id === b.owner))) ||
         s.bolts.some(b => typeof b.launched !== 'boolean') ||
         s.waves.some(b => ![b.span, b.angle].every(finite) || b.span < 0) ||
         s.casts.some(c => ![c.radius, c.left].every(finite) || c.radius < 0)) throw new Error('Invalid state frame');
@@ -99,13 +106,20 @@ export class ReplicationStream {
                 baseRevision: this.knownRevision, revision: this.world.revision,
                 cells, offset: 0, state: structuredClone(this.capture()) };
         }
-        const t = this.transfer, cells = t.cells.slice(t.offset, t.offset + CELLS_PER_PAGE);
-        const final = t.offset + cells.length === t.cells.length;
-        const page: StatePage = { protocol: PROTOCOL_VERSION, schema: TERRAIN_SCHEMA, sessionId: this.sessionId,
-            syncId: this.syncId, ack: request.ack, sequence: ++this.sequence,
-            kind: t.kind, baseRevision: t.baseRevision, revision: t.revision,
-            offset: t.offset, total: t.cells.length, final, cells, ...(final ? { state: t.state } : {}) };
-        serializePage(page); // Hard wire-size bound, including the final state frame.
+        const t = this.transfer;
+        let count = Math.min(CELLS_PER_PAGE, t.cells.length - t.offset), page: StatePage;
+        for (;;) {
+            const cells = t.cells.slice(t.offset, t.offset + count), final = t.offset + cells.length === t.cells.length;
+            page = { protocol: PROTOCOL_VERSION, schema: TERRAIN_SCHEMA, sessionId: this.sessionId,
+                syncId: this.syncId, ack: request.ack, sequence: this.sequence + 1,
+                kind: t.kind, baseRevision: t.baseRevision, revision: t.revision,
+                offset: t.offset, total: t.cells.length, final, cells, ...(final ? { state: t.state } : {}) };
+            try { serializePage(page); break; } catch (error) {
+                if (count <= 1) throw error;
+                count = Math.floor(count / 2);
+            }
+        }
+        this.sequence++;
         this.pending = page;
         return structuredClone(page);
     }

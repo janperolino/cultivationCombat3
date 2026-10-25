@@ -7,6 +7,7 @@ import { SessionAuthority } from '../src/session-authority.ts';
 import { ReplicationStream, PROTOCOL_VERSION, TERRAIN_SCHEMA, MAX_PACKET_BYTES, captureDisplayFrame } from '../src/replication.ts';
 
 export const BODY_LIMIT = 2048, FRAME_LIMIT = MAX_PACKET_BYTES, LEASE_MS = 5000;
+export const RECOVERY_MS = 30_000;
 const token = () => randomBytes(24).toString('hex');
 const assets = new Map([
     ['/', ['spike.html', 'text/html']], ['/spike.html', ['spike.html', 'text/html']],
@@ -16,20 +17,44 @@ const assets = new Map([
     ['/replication.js', ['replication.js', 'text/javascript']],
     ['/client-motion.js', ['client-motion.js', 'text/javascript']],
     ['/network-lab.js', ['network-lab.js', 'text/javascript']],
+    ['/client-actions.js', ['client-actions.js', 'text/javascript']],
 ]);
 
 // Exported for real HTTP integration tests. Only the local host owns this World.
-export function createSpikeServer({ now = () => performance.now(), autoTick = true } = {}) {
+export function createSpikeServer({ now = () => performance.now(), autoTick = true, scene = 'sparring' } = {}) {
     const world = new World();
+    if (scene === 'coop') {
+        world.ai = false;
+        world.actors.forEach(a => { a.team = 1; });
+        const sentinel = world.actor(2, 256, 256);
+        Object.assign(sentinel, { team: 2, hp: 3000, maxHp: 3000, ward: 0 });
+        world.actors.push(sentinel);
+    } else if (scene !== 'sparring') throw new Error('Unknown spike scene');
     const authority = new SessionAuthority(world, [0, 1]);
     const sessionId = token(), clients = new Map();
     let globalWindow = now(), globalCount = 0;
     let timer, previous = now(), accumulator = 0, droppedTime = 0;
 
     function expire() {
-        for (const [secret, c] of clients) if (now() - c.seen >= LEASE_MS) {
-            authority.disconnect(c.id); clients.delete(secret);
+        for (const [recoveryToken, c] of clients) {
+            if (c.active && now() - c.seen >= LEASE_MS) {
+                authority.disconnect(c.id); c.active = false;
+                c.stream = undefined;
+            }
+            if (!c.active && now() >= c.seen + LEASE_MS + RECOVERY_MS) clients.delete(recoveryToken);
         }
+    }
+    function activate(c) {
+        if (c.active) authority.disconnect(c.id);
+        c.id = token(); c.token = token(); c.active = true;
+        c.generation = authority.connect(c.id, c.actorId);
+        c.seen = now(); c.window = now(); c.count = 0;
+        const id = c.id;
+        c.stream = new ReplicationStream(world, sessionId, () => frame(id));
+    }
+    function assignment(c) {
+        return { token: c.token, recoveryToken: c.recoveryToken, sessionId, generation: c.generation,
+            actorId: c.actorId, scene, protocol: PROTOCOL_VERSION, schema: TERRAIN_SCHEMA };
     }
     function step() { expire(); authority.step(); }
     function frame(clientId) {
@@ -80,14 +105,31 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
                     send(res, 400, { error: 'Join takes no client assignment' }); return;
                 }
                 const actorId = [0, 1].find(id => ![...clients.values()].some(c => c.actorId === id));
-                if (actorId === undefined) { send(res, 409, { error: 'Both seats occupied. Leave a tab or wait five seconds after closing it.' }); return; }
-                const secret = token(), id = token(), generation = authority.connect(id, actorId);
-                clients.set(secret, { id, actorId, generation, seen: now(), window: now(), count: 0,
-                    stream: new ReplicationStream(world, sessionId, () => frame(id)) });
-                send(res, 200, { token: secret, sessionId, generation, actorId, protocol: PROTOCOL_VERSION, schema: TERRAIN_SCHEMA }); return;
+                if (actorId === undefined) { send(res, 409, { error: 'Both seats occupied or reserved. Use recovery, Leave explicitly, or wait for the reservation to expire.' }); return; }
+                const recoveryToken = token(), c = { recoveryToken, actorId, resumeSequence: 0 };
+                activate(c); clients.set(recoveryToken, c);
+                send(res, 200, assignment(c)); return;
             }
             const secret = req.headers.authorization?.replace(/^Bearer /, '');
-            const c = clients.get(secret);
+            if (path === '/api/resume' && req.method === 'POST') {
+                const body = await json(req);
+                // Check after body read: a concurrent leave/expiry may remove the reservation.
+                expire();
+                const c = clients.get(secret);
+                if (!c) { send(res, 401, { error: 'Recovery reservation expired. Join a fresh seat.' }); return; }
+                if (!body || body.sessionId !== sessionId || !Number.isSafeInteger(body.sequence) ||
+                    body.sequence < 1 || Object.keys(body).some(k => !['sessionId', 'sequence'].includes(k))) {
+                    send(res, 409, { error: 'Wrong recovery session or request' }); return;
+                }
+                if (body.sequence < c.resumeSequence || body.sequence - c.resumeSequence > 1024 ||
+                    (body.sequence === c.resumeSequence && !c.active)) {
+                    send(res, 409, { error: 'Stale recovery attempt', retryRecovery: true }); return;
+                }
+                // Same attempt returns the same assignment, including after a lost response.
+                if (body.sequence > c.resumeSequence) { activate(c); c.resumeSequence = body.sequence; }
+                send(res, 200, assignment(c)); return;
+            }
+            const c = [...clients.values()].find(c => c.active && c.token === secret);
             if (!c) { send(res, 401, { error: 'Connection expired. Join again.' }); return; }
             if (now() - c.window >= 1000) { c.window = now(); c.count = 0; }
             if (++c.count > 100) { send(res, 429, { error: 'Connection ingress limit' }); return; }
@@ -96,7 +138,7 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
             }
             if (path === '/api/sync' && req.method === 'POST') {
                 const body = await json(req);
-                if (clients.get(secret) !== c || now() - c.seen >= LEASE_MS) {
+                if (!c.active || c.token !== secret || now() - c.seen >= LEASE_MS) {
                     send(res, 401, { error: 'Connection expired' }); return;
                 }
                 try {
@@ -106,19 +148,21 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
                 return;
             }
             if (path === '/api/leave' && req.method === 'POST') {
-                await json(req); authority.disconnect(c.id); clients.delete(secret);
+                await json(req);
+                if (!c.active || c.token !== secret || now() - c.seen >= LEASE_MS) { send(res, 401, { error: 'Connection replaced or expired' }); return; }
+                authority.disconnect(c.id); clients.delete(c.recoveryToken); c.active = false;
                 send(res, 200, { left: true }); return;
             }
-            if (path === '/api/command' && req.method === 'POST') {
+            if ((path === '/api/command' || path === '/api/action') && req.method === 'POST') {
                 const body = await json(req);
                 // Recheck after asynchronous body reading: leave/expiry can race a request.
-                if (clients.get(secret) !== c || now() - c.seen >= LEASE_MS) {
+                if (!c.active || c.token !== secret || now() - c.seen >= LEASE_MS) {
                     send(res, 401, { error: 'Connection expired' }); return;
                 }
                 if (!body || body.sessionId !== sessionId || Object.keys(body).some(k => !['sessionId', 'command'].includes(k))) {
                     send(res, 409, { error: 'Wrong server session' }); return;
                 }
-                const result = authority.submit(c.id, body.command);
+                const result = path === '/api/action' ? authority.submitAction(c.id, body.command) : authority.submit(c.id, body.command);
                 if (result.accepted) c.seen = now();
                 send(res, result.accepted ? 200 : 422, { ...result, receipt: authority.receipt(c.id) }); return;
             }
@@ -148,6 +192,6 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-    const { server } = createSpikeServer();
+    const { server } = createSpikeServer({ scene: 'coop' });
     server.listen(5174, '127.0.0.1', () => console.log('Two-client sparring: http://127.0.0.1:5174 (open in two tabs)'));
 }

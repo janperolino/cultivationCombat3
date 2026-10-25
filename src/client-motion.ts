@@ -2,7 +2,7 @@ import { DT, World } from './sim.ts';
 import type { Actor, ActorInput, Cell } from './sim.ts';
 import type { DisplayFrame } from './replication.ts';
 
-export const HISTORY_LIMIT = 120, PREDICTION_HORIZON = 15, INTERPOLATION_TICKS = 12;
+export const HISTORY_LIMIT = 120, PREDICTION_HORIZON = 24, INTERPOLATION_TICKS = 9;
 type Sample = { tick: number; input: ActorInput };
 const copy = (a: Actor): Actor => ({ ...a, cool: [...a.cool] });
 export class MotionPredictor {
@@ -12,6 +12,8 @@ export class MotionPredictor {
     private pending: number[] = [];
     private authoritative?: DisplayFrame;
     private lastReceiveTick = -Infinity;
+    private clockOffset?: number;
+    private inputDelay = 0;
     tick = 0;
     correction = 0;
     maxCorrection = 0;
@@ -19,8 +21,11 @@ export class MotionPredictor {
     get actor() { return this.authoritative ? this.world.actors.find(a => a.id === this.actorId) : undefined; }
     get historySize() { return this.history.length; }
     get pendingCount() { return this.pending.length; }
+    get bufferTicks() { return this.inputDelay; }
     setTerrain(cells: Cell[]) { this.world.cells = cells; }
-    noteCommand(sequence: number) { this.pending.push(sequence); this.pending = this.pending.slice(-64); }
+    noteCommand(sequence: number) {
+        this.pending.push(sequence); this.pending = this.pending.slice(-64);
+    }
     private motion(input: ActorInput) {
         const a = this.actor;
         if (!a) return;
@@ -30,24 +35,34 @@ export class MotionPredictor {
         a.aim = Math.atan2(input.aim.y - a.y, input.aim.x - a.x);
         // No cast/dash calls: onset, resources and all combat stay authoritative.
     }
+    private bufferedMotion(tick: number) {
+        const sample = this.history[tick - this.inputDelay - (this.history[0]?.tick ?? 0)];
+        if (sample) this.motion(sample.input);
+    }
     advance(input: ActorInput, allowPrediction = true) {
         this.tick++;
         const motion: ActorInput = { move: { x: input.move.x, y: input.move.y }, aim: { ...input.aim },
             climb: input.climb, autoAltitude: input.autoAltitude };
         this.history.push({ tick: this.tick, input: motion });
         this.history = this.history.slice(-HISTORY_LIMIT);
-        if (allowPrediction && this.authoritative && this.tick - this.lastReceiveTick <= PREDICTION_HORIZON) this.motion(motion);
+        if (allowPrediction && this.authoritative && this.tick - this.lastReceiveTick <= PREDICTION_HORIZON) this.bufferedMotion(this.tick);
     }
-    reconcile(frame: DisplayFrame, capturedLocalTick: number) {
+    reconcile(frame: DisplayFrame, capturedLocalTick: number, oneWayTicks = 0) {
         if (this.authoritative && frame.tick <= this.authoritative.tick) return false;
         const before = this.actor ? copy(this.actor) : undefined;
         this.world.actors = frame.actors.map(copy);
         this.authoritative = frame; this.lastReceiveTick = this.tick;
+        this.inputDelay = Math.min(8, Math.max(0, Math.round(oneWayTicks)));
         this.pending = this.pending.filter(seq => seq > frame.receipt.applied);
-        const cut = Math.min(this.tick, Math.max(0, Math.round(capturedLocalTick)));
+        // Both clocks advance at 60Hz. Filter midpoint jitter instead of changing
+        // replay length with every noisy round trip; re-anchor after suspension.
+        const observedOffset = capturedLocalTick - frame.tick;
+        if (this.clockOffset === undefined || Math.abs(observedOffset - this.clockOffset) > 6) this.clockOffset = observedOffset;
+        else this.clockOffset += (observedOffset - this.clockOffset) * .15;
+        const cut = Math.min(this.tick, Math.max(0, Math.round(frame.tick + this.clockOffset)));
         // If the sample predates retained input, correct instead of inventing history.
         if (cut >= (this.history[0]?.tick ?? 1) - 1) {
-            for (const sample of this.history) if (sample.tick > cut) this.motion(sample.input);
+            for (const sample of this.history) if (sample.tick > cut) this.bufferedMotion(sample.tick);
         }
         const a = this.actor!;
         this.correction = before ? Math.hypot(a.x - before.x, a.y - before.y, a.z - before.z) : 0;

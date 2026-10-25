@@ -1,0 +1,46 @@
+{
+  "workload": "60 virtual seconds; two allied players + stationary high-HP target; 30Hz motion, staggered attacks, 20Hz live JSON, paged terrain",
+  "coldJoin": {
+    "pagesPerClient": [
+      16,
+      16
+    ],
+    "bytesPerClient": [
+      588540,
+      588540
+    ],
+    "cpuMs": 88.186
+  },
+  "steps": 3600,
+  "authorityStepMs": {
+    "mean": 0.066,
+    "p95": 0.151,
+    "max": 4.265
+  },
+  "heapUsedBefore": 35769472,
+  "heapUsedAfter": 37472040,
+  "rssAfter": 129863680,
+  "peaks": {
+    "bolts": 10,
+    "waves": 1,
+    "casts": 2
+  },
+  "maxPacketBytes": 38949,
+  "modeledJsonBytes": {
+    "commands": 522004,
+    "live": 4993844,
+    "terrain": 6810634
+  },
+  "terrainRevision": 89,
+  "terrainEqual": true,
+  "sharedClock": true,
+  "allyHealth": [
+    500,
+    500
+  ],
+  "targetDamage": 1299.5974626541138,
+  "consumedActions": [
+    40,
+    40
+  ]
+}

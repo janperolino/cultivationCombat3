@@ -24,6 +24,7 @@ export type Cell = {
     elevation: number;
 };
 export type Actor = Vec & {
+    team?: number;
     z: number;
     vz: number;
     id: number;
@@ -152,6 +153,10 @@ export class World {
         this.actors = [this.actor(0, 232, 256), this.actor(1, 280, 256)];
     }
     actor(id: number, x: number, y: number): Actor { return { id, x, y, z: this.groundHeight(x, y) + 3, vz: 0, hp: 500, maxHp: 500, qi: 100, realm: 1, cool: [0, 0, 0], aim: id ? Math.PI : 0, ward: 100, vx: 0, vy: 0, dashLeft: 0, dashCool: 0, dashX: 1, dashY: 0 }; }
+    canDamage(ownerId: number, target: Actor) {
+        const owner = this.actors.find(a => a.id === ownerId);
+        return !!owner && ownerId !== target.id && (owner.team === undefined || target.team === undefined || owner.team !== target.team);
+    }
     cellAt(x: number, y: number) { return this.cells[Math.floor(y / CELL) * GRID + Math.floor(x / CELL)]; }
     groundHeight(x: number, y: number): number {
         const fx = Math.max(0, Math.min(GRID - 1, x / CELL - .5)), fy = Math.max(0, Math.min(GRID - 1, y / CELL - .5)), ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
@@ -487,7 +492,7 @@ export class World {
                 b.x = oldX + (nextX - oldX) * (i + 1) / steps;
                 b.y = oldY + (nextY - oldY) * (i + 1) / steps;
                 b.z = oldZ + (nextZ - oldZ) * (i + 1) / steps;
-                const actor = this.actors.find(a => a.id !== b.owner && a.hp > 0 && Math.hypot(a.x - b.x, a.y - b.y, a.z + .7 - b.z) < 1.25);
+                const actor = this.actors.find(a => this.canDamage(b.owner, a) && a.hp > 0 && Math.hypot(a.x - b.x, a.y - b.y, a.z + .7 - b.z) < 1.25);
                 const cell = this.cellAt(b.x, b.y);
                 if (actor) {
                     this.damage(actor, 48 * b.power * b.damageScale);
@@ -522,7 +527,7 @@ export class World {
                     const theta = -1.15 + i / samples * 2.3, localX = Math.cos(theta) * wave.span, localY = Math.sin(theta) * wave.span;
                     const point = { x: wave.x + localX * co - localY * si, y: wave.y + localX * si + localY * co };
                     for (const a of this.actors)
-                        if (a.id !== wave.owner && a.hp > 0 && !wave.hit.has(a.id) && Math.abs(a.z + .7 - wave.z) < 1.8 && distance(a, point) < 1.5) {
+                        if (this.canDamage(wave.owner, a) && a.hp > 0 && !wave.hit.has(a.id) && Math.abs(a.z + .7 - wave.z) < 1.8 && distance(a, point) < 1.5) {
                             this.damage(a, 80 * wave.power);
                             wave.hit.add(a.id);
                             this.effect('impact', a, 3, .4);
@@ -565,7 +570,7 @@ export class World {
             c.groundZ = this.groundHeight(c.x, c.y);
             c.z = c.groundZ + (c.startZ - c.groundZ) * Math.pow(Math.max(0, Math.min(1, c.left / .4)), 2);
             for (const a of this.actors)
-                if (a.id !== c.owner && a.hp > 0 && !c.hit.has(a.id) && distance(a, c) < c.radius && a.z + .7 >= c.z - 1 && a.z + .7 <= previousZ + 1) {
+                if (this.canDamage(c.owner, a) && a.hp > 0 && !c.hit.has(a.id) && distance(a, c) < c.radius && a.z + .7 >= c.z - 1 && a.z + .7 <= previousZ + 1) {
                     this.damage(a, 160 * c.power * (1 - distance(a, c) / c.radius * .65));
                     c.hit.add(a.id);
                 }

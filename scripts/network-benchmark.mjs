@@ -18,7 +18,7 @@ export function benchmark(profile, ticks = 2700) {
         for (let i = 0; i < 64; i++) replica.apply(stream.reply(replica.request()));
         predictor.setTerrain(replica.cells); predictor.reconcile(capture(), 0);
         return { id, name, generation, replica, stream, predictor, remote, capture,
-            lab: new NetworkLab(profile, 0x534800 + id), sequence: 0, commands: 0, live: false, sync: false, frameTick: 0, terrainCaughtUpTick: 0 };
+            lab: new NetworkLab(profile, 0x534800 + id), sequence: 0, commands: 0, live: 0, sync: false, frameTick: 0, terrainCaughtUpTick: 0 };
     });
     const queue = [], errors = [], corrections = [];
     let bytes = 0, maxAge = 0, accepted = 0, rejected = 0, rttSum = 0, transactionCount = 0;
@@ -58,13 +58,14 @@ export function benchmark(profile, ticks = 2700) {
                     return result;
                 }, () => { c.commands--; });
             }
-            if (tick % 6 === 0 && !c.live) {
-                c.live = true;
+            if (tick % 3 === 0 && c.live < 3) {
+                c.live++;
                 transaction(c, tick, 'capture', c.capture, frame => {
-                    c.live = false;
+                    c.live--;
                     if (!frame || frame.tick <= c.frameTick) return;
                     c.frameTick = frame.tick;
-                    c.predictor.reconcile(frame, c.predictor.tick - delayTicks((c.predictor.tick - tick) * DT * 1000 / 2));
+                    const halfRttTicks = (c.predictor.tick - tick) / 2;
+                    c.predictor.reconcile(frame, c.predictor.tick - Math.round(halfRttTicks), halfRttTicks);
                     c.remote.push(frame); corrections.push(c.predictor.correction);
                 });
             }

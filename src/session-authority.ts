@@ -5,10 +5,13 @@ import { LOCK_RANGE, targetInRange } from './targeting.ts';
 export const STALE_INPUT_TICKS = 15;
 export const MAX_COMMANDS_PER_TICK = 4;
 export const MAX_SEQUENCE_GAP = 1024;
+export const MAX_PENDING_ACTIONS = 16, ACTION_TTL_TICKS = 120;
+export type ActionOutcome = { sequence: number; status: 'consumed' | 'expired' };
+export type InputReceipt = { received: number; applied: number; actionReceived?: number; actionApplied?: number; outcomes?: ActionOutcome[] };
 
 export type CommandResult = { accepted: true } | {
     accepted: false;
-    reason: 'unknown-client' | 'invalid-command' | 'wrong-generation' | 'not-owner' | 'sequence' | 'rate-limit';
+    reason: 'unknown-client' | 'invalid-command' | 'wrong-generation' | 'not-owner' | 'sequence' | 'rate-limit' | 'action-full' | 'action-conflict';
 };
 type Connection = {
     actorId: number;
@@ -18,6 +21,11 @@ type Connection = {
     acceptedThisTick: number;
     receivedTick: number;
     input?: ActorInput;
+    actions: { input: ActorInput; tick: number; sequence?: number; expiresTick?: number }[];
+    actionReceived: number;
+    actionApplied: number;
+    outcomes: ActionOutcome[];
+    actionPayloads: Map<number, string>;
 };
 type RecordValue = Record<string, unknown>;
 function record(value: unknown): value is RecordValue {
@@ -86,7 +94,8 @@ export class SessionAuthority {
         }
         if (!Number.isSafeInteger(this.nextGeneration)) throw new Error('Session generation exhausted');
         const generation = this.nextGeneration++;
-        this.connections.set(clientId, { actorId, generation, sequence: 0, appliedSequence: 0, acceptedThisTick: 0, receivedTick: -STALE_INPUT_TICKS });
+        this.connections.set(clientId, { actorId, generation, sequence: 0, appliedSequence: 0, acceptedThisTick: 0, receivedTick: -STALE_INPUT_TICKS,
+            actions: [], actionReceived: 0, actionApplied: 0, outcomes: [], actionPayloads: new Map() });
         return generation;
     }
 
@@ -94,9 +103,10 @@ export class SessionAuthority {
         return this.connections.delete(clientId);
     }
 
-    receipt(clientId: string): { received: number; applied: number } {
+    receipt(clientId: string): InputReceipt {
         const c = this.connections.get(clientId);
-        return { received: c?.sequence ?? 0, applied: c?.appliedSequence ?? 0 };
+        return { received: c?.sequence ?? 0, applied: c?.appliedSequence ?? 0,
+            ...(c?.actionReceived ? { actionReceived: c.actionReceived, actionApplied: c.actionApplied, outcomes: structuredClone(c.outcomes) } : {}) };
     }
 
     submit(clientId: string, data: unknown): CommandResult {
@@ -117,10 +127,39 @@ export class SessionAuthority {
         if (input.aim.targetId !== undefined && !this.target(c.actorId, input.aim.targetId)) {
             return { accepted: false, reason: 'invalid-command' };
         }
+        if ((input.fire || input.dash) && c.actions.length >= MAX_PENDING_ACTIONS) return { accepted: false, reason: 'action-full' };
+        // Compatibility commands preserve accepted one-shots even when newer motion coalesces.
+        if (input.fire || input.dash) c.actions.push({ input: structuredClone(input), tick: this.currentTick });
+        delete input.fire; delete input.dash;
         c.sequence = data.sequence;
         c.receivedTick = this.currentTick;
         c.acceptedThisTick++;
         c.input = input;
+        return { accepted: true };
+    }
+
+    submitAction(clientId: string, data: unknown): CommandResult {
+        const c = this.connections.get(clientId);
+        if (!c) return { accepted: false, reason: 'unknown-client' };
+        if (!record(data) || !keys(data, ['generation', 'sequence', 'actorId', 'input', 'expiresTick']) ||
+            !id(data.generation) || !id(data.sequence) || data.sequence < 1 || !id(data.actorId)) return { accepted: false, reason: 'invalid-command' };
+        if (data.generation !== c.generation) return { accepted: false, reason: 'wrong-generation' };
+        if (data.actorId !== c.actorId) return { accepted: false, reason: 'not-owner' };
+        const input = parseInput(data.input);
+        if (!input || (!input.fire && !input.dash)) return { accepted: false, reason: 'invalid-command' };
+        if (data.expiresTick !== undefined && (!id(data.expiresTick) || data.expiresTick > this.currentTick + ACTION_TTL_TICKS)) return { accepted: false, reason: 'invalid-command' };
+        const payload = JSON.stringify({ input, expiresTick: data.expiresTick });
+        if (data.sequence <= c.actionReceived) {
+            if (c.actionPayloads.has(data.sequence) && c.actionPayloads.get(data.sequence) !== payload) return { accepted: false, reason: 'action-conflict' };
+            return { accepted: true }; // Retried or old already-consumed ID never executes twice.
+        }
+        if (data.sequence !== c.actionReceived + 1) return { accepted: false, reason: 'sequence' };
+        if (c.actions.length >= MAX_PENDING_ACTIONS) return { accepted: false, reason: 'action-full' };
+        if (c.acceptedThisTick >= MAX_COMMANDS_PER_TICK) return { accepted: false, reason: 'rate-limit' };
+        // Target hints can become invalid in flight; consume with coordinate fallback.
+        c.actions.push({ input, tick: this.currentTick, sequence: data.sequence, expiresTick: data.expiresTick as number | undefined });
+        c.actionReceived = data.sequence; c.actionPayloads.set(data.sequence, payload); c.acceptedThisTick++;
+        while (c.actionPayloads.size > 32) c.actionPayloads.delete(c.actionPayloads.keys().next().value!);
         return { accepted: true };
     }
 
@@ -149,6 +188,26 @@ export class SessionAuthority {
                     else { delete aim.targetId; delete aim.locked; }
                 }
                 inputs.set(c.actorId, { ...c.input, aim });
+            }
+            const action = c.actions.shift();
+            if (action) {
+                const expired = this.currentTick - action.tick >= ACTION_TTL_TICKS ||
+                    (action.expiresTick !== undefined && this.currentTick >= action.expiresTick);
+                if (!expired) {
+                    const aim = { ...action.input.aim };
+                    if (aim.targetId !== undefined) {
+                        const target = this.target(c.actorId, aim.targetId);
+                        if (target) { aim.x = target.x; aim.y = target.y; aim.z = target.z + .7; }
+                        else { delete aim.targetId; delete aim.locked; }
+                    }
+                    inputs.set(c.actorId, { ...inputs.get(c.actorId)!, aim, fire: action.input.fire, dash: action.input.dash,
+                        ...(action.input.dash ? { move: { ...action.input.move } } : {}) });
+                }
+                if (action.sequence !== undefined) {
+                    c.actionApplied = action.sequence;
+                    c.outcomes.push({ sequence: action.sequence, status: expired ? 'expired' : 'consumed' });
+                    c.outcomes = c.outcomes.slice(-32);
+                }
             }
         }
         this.world.stepPlayers(inputs, DT);
