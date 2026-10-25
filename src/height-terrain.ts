@@ -9,7 +9,9 @@ type Patch = {
 };
 export class HeightTerrain {
     private patches: Patch[] = [];
-    constructor() {
+    private viewportCull: boolean;
+    constructor(viewportCull = false) {
+        this.viewportCull = viewportCull;
         for (let y = 0; y < GRID; y += CHUNK)
             for (let x = 0; x < GRID; x += CHUNK) {
                 const canvas = document.createElement('canvas');
@@ -23,8 +25,14 @@ export class HeightTerrain {
         for (const p of this.patches)
             p.revision = -1;
     }
-    draw(ctx: CanvasRenderingContext2D, w: World) {
+    draw(ctx: CanvasRenderingContext2D, w: Pick<World, 'cells' | 'cellVersions' | 'revision' | 'groundHeight'>) {
+        const t = this.viewportCull ? ctx.getTransform() : undefined;
         for (const patch of this.patches) {
+            if (t) {
+                const left = patch.x * CELL - MARGIN, top = patch.y * CELL - MARGIN, span = SPAN + MARGIN * 2;
+                const points = [[left, top], [left + span, top], [left, top + span], [left + span, top + span]].map(([x, y]) => ({ x: t.a * x + t.c * y + t.e, y: t.b * x + t.d * y + t.f }));
+                if (Math.max(...points.map(p => p.x)) < 0 || Math.min(...points.map(p => p.x)) > ctx.canvas.width || Math.max(...points.map(p => p.y)) < 0 || Math.min(...points.map(p => p.y)) > ctx.canvas.height) continue;
+            }
             let dirty = patch.revision < 0;
             if (!dirty && patch.revision !== w.revision)
             for (let y = Math.max(0, patch.y - 1); y <= Math.min(GRID - 1, patch.y + CHUNK); y++)
@@ -38,7 +46,7 @@ export class HeightTerrain {
             ctx.drawImage(patch.canvas, patch.x * CELL - MARGIN, patch.y * CELL - MARGIN, SPAN + MARGIN * 2, SPAN + MARGIN * 2);
         }
     }
-    private paint(p: Patch, w: World) {
+    private paint(p: Patch, w: Pick<World, 'cells' | 'cellVersions' | 'revision' | 'groundHeight'>) {
         const g = p.canvas.getContext('2d')!;
         g.setTransform(1, 0, 0, 1, 0, 0);
         g.clearRect(0, 0, p.canvas.width, p.canvas.height);

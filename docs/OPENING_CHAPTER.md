@@ -1,3 +1,5 @@
+> Historical browser-era reference, preserved 2026-10-25. Future edits and product decisions live in the [native version](../../cultivationGame3-Godot/new-game-project/docs/OPENING_CHAPTER.md) and [native roadmap](../../cultivationGame3-Godot/new-game-project/docs/IMPLEMENTATION_PLAN.md). Old technical/current-state statements below are historical.
+
 # Opening chapter — A Place to Stay
 
 Working specification · 2026-10-24 · [Game design](GAME_DESIGN.md) · [Art direction](ART_DIRECTION.md)

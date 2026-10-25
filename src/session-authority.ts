@@ -11,7 +11,7 @@ export type InputReceipt = { received: number; applied: number; actionReceived?:
 
 export type CommandResult = { accepted: true } | {
     accepted: false;
-    reason: 'unknown-client' | 'invalid-command' | 'wrong-generation' | 'not-owner' | 'sequence' | 'rate-limit' | 'action-full' | 'action-conflict';
+    reason: 'unknown-client' | 'invalid-command' | 'wrong-generation' | 'wrong-round' | 'not-owner' | 'sequence' | 'rate-limit' | 'action-full' | 'action-conflict' | 'encounter-state';
 };
 type Connection = {
     actorId: number;
@@ -45,8 +45,8 @@ function id(value: unknown): value is number {
 // Intended for parsed JSON data. Copy only approved fields so later caller mutation
 // cannot change accepted inputs. Message byte limits belong at the transport boundary.
 function parseInput(value: unknown): ActorInput | undefined {
-    if (!record(value) || !keys(value, ['move', 'aim', 'fire', 'dash', 'climb', 'autoAltitude'])) return;
-    const { move, aim, fire, dash, climb, autoAltitude } = value;
+    if (!record(value) || !keys(value, ['move', 'aim', 'fire', 'dash', 'climb', 'autoAltitude', 'revive'])) return;
+    const { move, aim, fire, dash, climb, autoAltitude, revive } = value;
     if (!record(move) || !keys(move, ['x', 'y']) || !finite(move.x, -1, 1) || !finite(move.y, -1, 1)) return;
     if (!record(aim) || !keys(aim, ['x', 'y', 'z', 'targetId', 'locked']) ||
         !finite(aim.x, -SIZE, SIZE * 2) || !finite(aim.y, -SIZE, SIZE * 2)) return;
@@ -58,12 +58,14 @@ function parseInput(value: unknown): ActorInput | undefined {
     if (dash !== undefined && typeof dash !== 'boolean') return;
     if (climb !== undefined && !finite(climb, -1, 1)) return;
     if (autoAltitude !== undefined && typeof autoAltitude !== 'boolean') return;
+    if (revive !== undefined && typeof revive !== 'boolean') return;
     return {
         move: { x: move.x, y: move.y },
         aim: { x: aim.x, y: aim.y, z: aim.z as number | undefined,
             targetId: aim.targetId as number | undefined, locked: aim.locked as boolean | undefined },
         fire, dash: dash as boolean | undefined, climb: climb as number | undefined,
         autoAltitude: autoAltitude as boolean | undefined,
+        revive: revive as boolean | undefined,
     };
 }
 
@@ -73,6 +75,7 @@ export class SessionAuthority {
     private readonly connections = new Map<string, Connection>();
     private nextGeneration = 1;
     private currentTick = 0;
+    private encounterEpoch?: number;
 
     constructor(world: World, actorIds: readonly number[]) {
         if (actorIds.length < 1 || actorIds.length > 2 || new Set(actorIds).size !== actorIds.length ||
@@ -81,6 +84,7 @@ export class SessionAuthority {
         }
         this.actorIds = [...actorIds];
         this.world = world;
+        this.encounterEpoch = world.encounter?.epoch;
     }
 
     get tick() { return this.currentTick; }
@@ -96,6 +100,7 @@ export class SessionAuthority {
         const generation = this.nextGeneration++;
         this.connections.set(clientId, { actorId, generation, sequence: 0, appliedSequence: 0, acceptedThisTick: 0, receivedTick: -STALE_INPUT_TICKS,
             actions: [], actionReceived: 0, actionApplied: 0, outcomes: [], actionPayloads: new Map() });
+        this.world.encounter?.join(actorId);
         return generation;
     }
 
@@ -104,6 +109,7 @@ export class SessionAuthority {
     }
 
     receipt(clientId: string): InputReceipt {
+        this.synchronizeEncounter();
         const c = this.connections.get(clientId);
         return { received: c?.sequence ?? 0, applied: c?.appliedSequence ?? 0,
             ...(c?.actionReceived ? { actionReceived: c.actionReceived, actionApplied: c.actionApplied, outcomes: structuredClone(c.outcomes) } : {}) };
@@ -112,11 +118,13 @@ export class SessionAuthority {
     submit(clientId: string, data: unknown): CommandResult {
         const c = this.connections.get(clientId);
         if (!c) return { accepted: false, reason: 'unknown-client' };
-        if (!record(data) || !keys(data, ['generation', 'sequence', 'actorId', 'input']) ||
+        this.synchronizeEncounter();
+        if (!record(data) || !keys(data, ['generation', 'sequence', 'actorId', 'input', 'round']) ||
             !id(data.generation) || !id(data.sequence) || !id(data.actorId)) {
             return { accepted: false, reason: 'invalid-command' };
         }
         if (data.generation !== c.generation) return { accepted: false, reason: 'wrong-generation' };
+        if (data.round !== this.world.encounter?.epoch) return { accepted: false, reason: 'wrong-round' };
         if (data.actorId !== c.actorId) return { accepted: false, reason: 'not-owner' };
         if (data.sequence <= c.sequence || data.sequence - c.sequence > MAX_SEQUENCE_GAP) {
             return { accepted: false, reason: 'sequence' };
@@ -124,6 +132,7 @@ export class SessionAuthority {
         if (c.acceptedThisTick >= MAX_COMMANDS_PER_TICK) return { accepted: false, reason: 'rate-limit' };
         const input = parseInput(data.input);
         if (!input) return { accepted: false, reason: 'invalid-command' };
+        if (input.fire && !this.world.techniqueEquipped(this.world.actors.find(a => a.id === c.actorId)!, input.fire)) return { accepted: false, reason: 'invalid-command' };
         if (input.aim.targetId !== undefined && !this.target(c.actorId, input.aim.targetId)) {
             return { accepted: false, reason: 'invalid-command' };
         }
@@ -141,12 +150,15 @@ export class SessionAuthority {
     submitAction(clientId: string, data: unknown): CommandResult {
         const c = this.connections.get(clientId);
         if (!c) return { accepted: false, reason: 'unknown-client' };
-        if (!record(data) || !keys(data, ['generation', 'sequence', 'actorId', 'input', 'expiresTick']) ||
+        this.synchronizeEncounter();
+        if (!record(data) || !keys(data, ['generation', 'sequence', 'actorId', 'input', 'expiresTick', 'round']) ||
             !id(data.generation) || !id(data.sequence) || data.sequence < 1 || !id(data.actorId)) return { accepted: false, reason: 'invalid-command' };
         if (data.generation !== c.generation) return { accepted: false, reason: 'wrong-generation' };
+        if (data.round !== this.world.encounter?.epoch) return { accepted: false, reason: 'wrong-round' };
         if (data.actorId !== c.actorId) return { accepted: false, reason: 'not-owner' };
         const input = parseInput(data.input);
         if (!input || (!input.fire && !input.dash)) return { accepted: false, reason: 'invalid-command' };
+        if (input.fire && !this.world.techniqueEquipped(this.world.actors.find(a => a.id === c.actorId)!, input.fire)) return { accepted: false, reason: 'invalid-command' };
         if (data.expiresTick !== undefined && (!id(data.expiresTick) || data.expiresTick > this.currentTick + ACTION_TTL_TICKS)) return { accepted: false, reason: 'invalid-command' };
         const payload = JSON.stringify({ input, expiresTick: data.expiresTick });
         if (data.sequence <= c.actionReceived) {
@@ -169,7 +181,31 @@ export class SessionAuthority {
         return actor && target && targetInRange(actor, target, LOCK_RANGE) ? target : undefined;
     }
 
+    // Retry is an authenticated request against one terminal epoch. Repeating an
+    // old request can never restart a later attempt, even after response loss.
+    retry(clientId: string, data: unknown): CommandResult {
+        const c = this.connections.get(clientId);
+        if (!c) return { accepted: false, reason: 'unknown-client' };
+        if (!record(data) || !keys(data, ['generation', 'round']) || !id(data.generation) || !id(data.round)) return { accepted: false, reason: 'invalid-command' };
+        if (data.generation !== c.generation) return { accepted: false, reason: 'wrong-generation' };
+        if (data.round !== this.world.encounter?.epoch) return { accepted: false, reason: 'wrong-round' };
+        if (!this.world.encounter?.retry()) return { accepted: false, reason: 'encounter-state' };
+        this.synchronizeEncounter(); return { accepted: true };
+    }
+
+    private synchronizeEncounter() {
+        const epoch = this.world.encounter?.epoch;
+        if (this.encounterEpoch === epoch) return;
+        this.encounterEpoch = epoch;
+        for (const c of this.connections.values()) {
+            for (const action of c.actions) if (action.sequence !== undefined) c.outcomes.push({ sequence: action.sequence, status: 'expired' });
+            c.outcomes = c.outcomes.slice(-32); c.actionApplied = c.actionReceived;
+            c.actions = []; c.input = undefined; c.receivedTick = -STALE_INPUT_TICKS;
+        }
+    }
+
     step(): void {
+        this.synchronizeEncounter();
         const inputs = new Map<number, ActorInput>();
         for (const actorId of this.actorIds) {
             const actor = this.world.actors.find(a => a.id === actorId);
@@ -211,6 +247,7 @@ export class SessionAuthority {
             }
         }
         this.world.stepPlayers(inputs, DT);
+        this.synchronizeEncounter();
         this.currentTick++;
         for (const c of this.connections.values()) {
             c.acceptedThisTick = 0;

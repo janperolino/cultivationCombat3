@@ -1,3 +1,4 @@
+import { actorPalette } from './study-scene.ts';
 import { GRID, CELL, World } from './sim.ts';
 import type { Actor, Vec } from './sim.ts';
 import { project, lift, TILT, YAW } from './projection.ts';
@@ -5,12 +6,17 @@ type Prop = Vec & {
     kind: number;
     variant: number;
 };
+type Band = { key: number; props: Prop[]; canvas?: HTMLCanvasElement; x: number; y: number; width: number; height: number };
 export class DepthScene {
+    invalidate() { this.revision = -1; this.bands = []; }
     private revision = -1;
     private props: Prop[] = [];
     private trees: HTMLCanvasElement[] = [];
     private rocks: HTMLCanvasElement[] = [];
-    constructor() {
+    private bands: Band[] = [];
+    private cached: boolean;
+    constructor(cached = false) {
+        this.cached = cached;
         for (let i = 0; i < 3; i++) {
             this.trees.push(this.sprite(true, i));
             this.rocks.push(this.sprite(false, i));
@@ -82,7 +88,8 @@ export class DepthScene {
         return c;
     }
     private billboard(ctx: CanvasRenderingContext2D, p: Vec) { const h = lift(p.z ?? 0, true); ctx.translate(p.x + h.x, p.y + h.y); ctx.rotate(-YAW); ctx.scale(1, 1 / TILT); }
-    draw(ctx: CanvasRenderingContext2D, world: World, actors: Actor[], cam: Vec, zoom: number, width: number, height: number) {
+    draw(ctx: CanvasRenderingContext2D, world: Pick<World, 'cells' | 'revision' | 'cellAt' | 'groundHeight' | 'time'>, actors: Actor[], cam: Vec, zoom: number, width: number, height: number) {
+        const changed = this.revision !== world.revision;
         if (this.revision !== world.revision) {
             this.revision = world.revision;
             this.props = [];
@@ -101,6 +108,25 @@ export class DepthScene {
                         alive++;
             if (alive > 9)
                 buildings.push({ x: x + 10, y: y + 6, kind: 3, variant: 0 });
+        }
+        if (this.cached) {
+            if (changed || !this.bands.length) {
+                const groups = new Map<number, Prop[]>();
+                for (const p of [...this.props.filter(p => !buildings.some(b => Math.abs(p.x - b.x) <= 10 && Math.abs(p.y - b.y) <= 6)), ...buildings]) {
+                    const key = Math.floor(project(p, true).y / 8);
+                    const props = groups.get(key) ?? []; props.push({ ...p, z: world.groundHeight(p.x, p.y) }); groups.set(key, props);
+                }
+                this.bands = [...groups].sort(([a], [b]) => a - b).map(([key, props]) => {
+                    props.sort((a, b) => project({ x: a.x, y: a.y }, true).y - project({ x: b.x, y: b.y }, true).y);
+                    const old = this.bands.find(b => b.key === key);
+                    if (old && old.props.length === props.length && props.every((p, i) => { const q = old.props[i]; return p.x === q.x && p.y === q.y && p.z === q.z && p.kind === q.kind && p.variant === q.variant; })) return old;
+                    const points = props.map(p => project(p, true));
+                    const x = Math.floor(Math.min(...points.map(p => p.x)) - 32), y = Math.floor(Math.min(...points.map(p => p.y)) - 32);
+                    return { key, props, x, y, width: Math.ceil(Math.max(...points.map(p => p.x)) + 32 - x), height: Math.ceil(Math.max(...points.map(p => p.y)) + 16 - y) };
+                });
+            }
+            this.drawBands(ctx, actors, world.time, world.groundHeight);
+            return;
         }
         const origin = project(cam, true), visible = this.props.filter(p => { const v = project(p, true); return Math.abs((v.x - origin.x) * zoom) < width * .65 + 80 && Math.abs((v.y - origin.y) * zoom) < height * .6 + 90; });
         const items: (Prop | Actor)[] = [...visible.filter(p => !buildings.some(b => Math.abs(p.x - b.x) <= 10 && Math.abs(p.y - b.y) <= 6)), ...buildings, ...actors];
@@ -127,6 +153,50 @@ export class DepthScene {
             else
                 this.actor(ctx, item, world.time, world.groundHeight(item.x, item.y));
         }
+    }
+    private drawProp(ctx: CanvasRenderingContext2D, p: Prop, near = false) {
+        if (p.kind === 3) { this.building(ctx, p); return; }
+        ctx.save(); this.billboard(ctx, p);
+        ctx.fillStyle = '#06150d66'; ctx.beginPath(); ctx.ellipse(1.8, .6, p.kind === 1 ? 2.6 : 1.8, .6, -.2, 0, 7); ctx.fill();
+        ctx.globalAlpha = near ? .5 : 1;
+        ctx.drawImage(p.kind === 1 ? this.trees[p.variant] : this.rocks[p.variant], -3, -9, 6, 10); ctx.restore();
+    }
+    private drawBands(ctx: CanvasRenderingContext2D, actors: Actor[], time: number, ground: (x: number, y: number) => number) {
+        const projectedActors = actors.map(a => ({ actor: a, p: project(a, true) })).sort((a, b) => a.p.y - b.p.y);
+        let index = 0;
+        const transform = ctx.getTransform(), co = Math.cos(YAW), si = Math.sin(YAW);
+        // Map projected world metres directly to the existing canvas transform.
+        const matrix = { a: transform.a * co - transform.c * si, b: transform.b * co - transform.d * si,
+            c: (transform.a * si + transform.c * co) / TILT, d: (transform.b * si + transform.d * co) / TILT };
+        for (const band of this.bands) {
+            while (index < projectedActors.length && projectedActors[index].p.y < band.key * 8) {
+                const a = projectedActors[index++].actor; this.actor(ctx, a, time, ground(a.x, a.y));
+            }
+            const corners = [[band.x, band.y], [band.x + band.width, band.y], [band.x, band.y + band.height], [band.x + band.width, band.y + band.height]].map(([x, y]) => ({ x: matrix.a * x + matrix.c * y + transform.e, y: matrix.b * x + matrix.d * y + transform.f }));
+            if (Math.max(...corners.map(p => p.x)) < 0 || Math.min(...corners.map(p => p.x)) > ctx.canvas.width || Math.max(...corners.map(p => p.y)) < 0 || Math.min(...corners.map(p => p.y)) > ctx.canvas.height) { band.canvas = undefined; continue; }
+            // Render the few bands around actors directly for exact depth ordering
+            // and the original transparent foreground trees. All others are static.
+            if (projectedActors.some(a => a.p.y >= band.key * 8 - 8 && a.p.y < (band.key + 1) * 8)) {
+                for (const p of band.props) {
+                    const flat = project({ x: p.x, y: p.y }, true);
+                    while (index < projectedActors.length && projectedActors[index].p.y <= flat.y) { const a = projectedActors[index++].actor; this.actor(ctx, a, time, ground(a.x, a.y)); }
+                    const raised = project(p, true), x = matrix.a * raised.x + matrix.c * raised.y + transform.e, y = matrix.b * raised.x + matrix.d * raised.y + transform.f;
+                    const padding = 32 * Math.max(Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d));
+                    if (x < -padding || x > ctx.canvas.width + padding || y < -padding || y > ctx.canvas.height + padding) continue;
+                    this.drawProp(ctx, p, projectedActors.some(a => a.actor.hp > 0 && Math.abs(a.p.x - flat.x) < 2.6 && a.p.y < flat.y && a.p.y > flat.y - 8));
+                }
+                continue;
+            }
+            if (!band.canvas) {
+                const canvas = document.createElement('canvas'); canvas.width = band.width * 6; canvas.height = band.height * 6;
+                const g = canvas.getContext('2d')!; g.scale(6, 6); g.translate(-band.x, -band.y); g.scale(1, TILT); g.rotate(YAW);
+                for (const p of band.props) this.drawProp(g, p);
+                band.canvas = canvas;
+            }
+            ctx.save(); ctx.transform(co, -si, si / TILT, co / TILT, 0, 0);
+            ctx.drawImage(band.canvas, band.x, band.y, band.width, band.height); ctx.restore();
+        }
+        while (index < projectedActors.length) { const a = projectedActors[index++].actor; this.actor(ctx, a, time, ground(a.x, a.y)); }
     }
     private building(ctx: CanvasRenderingContext2D, b: Prop) {
         const point = (x: number, y: number, z: number) => { const h = lift(z + (b.z ?? 0), true); return { x: b.x + x + h.x, y: b.y + y + h.y }; };
@@ -163,7 +233,7 @@ export class DepthScene {
             ctx.restore();
             return;
         }
-        const hover = a.z - ground, color = a.id ? '#f4ba86' : '#a4f4e3';
+        const hover = a.z - ground, palette = actorPalette(a), color = palette.glow;
         ctx.fillStyle = '#020a08aa';
         ctx.beginPath();
         ctx.ellipse(.5, .4, 1.3, .4, 0, 0, 7);
@@ -191,7 +261,7 @@ export class DepthScene {
         ctx.ellipse(0, -.7, 1.2, 1.7, 0, 0, 7);
         ctx.stroke();
         ctx.shadowBlur = 0;
-        ctx.fillStyle = a.id ? '#a26d57' : '#d7e0ca';
+        ctx.fillStyle = palette.robe;
         ctx.beginPath();
         ctx.moveTo(-.3, -1.25);
         ctx.quadraticCurveTo(-.6, -.7, -.75, .3);
@@ -199,7 +269,7 @@ export class DepthScene {
         ctx.lineTo(.28, -1.25);
         ctx.closePath();
         ctx.fill();
-        ctx.fillStyle = a.id ? '#5b403c' : '#47776b';
+        ctx.fillStyle = palette.trim;
         ctx.beginPath();
         ctx.moveTo(-.05, -1.2);
         ctx.lineTo(-.3, .1);

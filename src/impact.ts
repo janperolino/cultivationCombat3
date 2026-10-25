@@ -1,3 +1,4 @@
+import type { StudyScene } from './study-scene.ts';
 import type { World, Vec, Effect } from './sim.ts';
 // Presentation-only: never mutates the world or advances combat time.
 type Fragment = Vec & {
@@ -70,7 +71,8 @@ export class ImpactPresentation {
         sub.start();
         sub.stop(now + .8);
     }
-    capture(world: World) {
+    prime(world: Pick<StudyScene, 'effects' | 'casts'>) { for (const e of world.effects) this.seen.add(e); for (const c of world.casts) this.charges.add(c); }
+    capture(world: Pick<StudyScene, 'casts' | 'effects' | 'time' | 'groundHeight'>) {
         for (const c of world.casts) {
             if (this.charges.has(c))
                 continue;
@@ -128,7 +130,7 @@ export class ImpactPresentation {
         this.particles = this.particles.filter(p => p.life > 0);
     }
     offset() { const n = this.reduced ? 0 : this.trauma * this.trauma * 13; return { x: Math.sin(this.clock * 117) * n, y: Math.cos(this.clock * 93) * n }; }
-    draw(ctx: CanvasRenderingContext2D, world: World, zoom: number, heightVector: Vec = { x: 0, y: -1 }) {
+    draw(ctx: CanvasRenderingContext2D, world: Pick<StudyScene, 'effects' | 'actors'>, zoom: number, heightVector: Vec = { x: 0, y: -1 }) {
         for (const e of world.effects) {
             if (e.kind !== 'nova' && e.kind !== 'impact')
                 continue;

@@ -1,4 +1,10 @@
 import { dashProfile } from './time-flow.ts';
+import { DEFAULT_CONTENT, validateContent } from './content.ts';
+import type { Content, TechniqueId } from './content.ts';
+import { stepEnemies } from './enemy-ai.ts';
+import type { EnemyState } from './enemy-ai.ts';
+import { Encounter } from './encounter.ts';
+import { hostile } from './teams.ts';
 import { steerVelocity, targetInRange, LOCK_RANGE } from './targeting.ts';
 import type { Aim } from './targeting.ts';
 // Pure deterministic simulation. Metres, seconds and a fixed 1/60 s step; no DOM.
@@ -7,8 +13,9 @@ export type Vec = {
     y: number;
     z?: number;
 };
-export type Technique = 'bolt' | 'slash' | 'nova';
+export type Technique = TechniqueId;
 export type ActorInput = {
+    revive?: boolean;
     move: Vec;
     aim: Aim;
     fire?: Technique;
@@ -24,6 +31,8 @@ export type Cell = {
     elevation: number;
 };
 export type Actor = Vec & {
+    loadoutId?: string;
+    enemyId?: string;
     team?: number;
     z: number;
     vz: number;
@@ -43,6 +52,7 @@ export type Actor = Vec & {
     dashY: number;
 };
 export type Effect = Vec & {
+    visualId: number;
     kind: string;
     radius: number;
     life: number;
@@ -114,6 +124,11 @@ export function landscapeHeight(x: number, y: number) {
 export const power = (realm: number) => Math.pow(3, realm);
 export const distance = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 export class World {
+    private nextVisualId = 1;
+    encounter?: Encounter;
+    readonly enemyStates = new Map<number, EnemyState>();
+    get telegraphs() { return [...this.enemyStates.values()].flatMap(s => s.warning &&
+        this.actors.some(a => a.id === s.actorId && a.hp > 0) && this.actors.some(a => a.id === s.warning!.targetId && a.hp > 0) ? [s.warning] : []); }
     cells: Cell[] = [];
     actors: Actor[] = [];
     bolts: Bolt[] = [];
@@ -131,7 +146,12 @@ export class World {
     cellVersions = new Uint32Array(GRID * GRID);
     private randomState = 0x53455645;
     random() { let x = this.randomState; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; this.randomState = x >>> 0; return this.randomState / 4294967296; }
-    constructor() {
+    readonly content: Content;
+    constructor(content: unknown = DEFAULT_CONTENT, encounterId?: string, lifecycle = false) {
+        this.content = validateContent(content);
+        const encounter = encounterId === undefined ? undefined : this.content.encounters.find(e => e.id === encounterId);
+        if (encounterId !== undefined && !encounter) throw new Error(`Unknown encounter: ${encounterId}`);
+        if (lifecycle && !encounter?.rules) throw new Error('Encounter lifecycle requires validated rules');
         for (let y = 0; y < GRID; y++)
             for (let x = 0; x < GRID; x++) {
                 const h = ((x * 374761393 ^ y * 668265263) >>> 0) % 100;
@@ -151,11 +171,31 @@ export class World {
                 }
         }
         this.actors = [this.actor(0, 232, 256), this.actor(1, 280, 256)];
+        if (encounter) {
+            this.ai = false;
+            this.actors.forEach(a => { a.team = encounter.playerTeam; });
+            if (encounter.playerLoadouts) this.actors.forEach(a => { a.loadoutId = encounter.playerLoadouts![a.id]; });
+            for (const spawn of encounter.spawns) {
+                const definition = this.content.enemies.find(e => e.id === spawn.enemyId)!;
+                for (let i = 0; i < spawn.count; i++) {
+                    const x = spawn.x + i * 4, enemy = this.actor(this.actors.length, x, spawn.y);
+                    Object.assign(enemy, { team: definition.team, hp: definition.hp, maxHp: definition.hp, ward: definition.ward,
+                        realm: definition.realm, enemyId: definition.id, z: Math.min(65, this.groundHeight(x, spawn.y) + spawn.altitude) });
+                    this.actors.push(enemy);
+                    this.enemyStates.set(enemy.id, { actorId: enemy.id, definitionId: definition.id, recovery: 0 });
+                }
+            }
+        }
+        if (lifecycle) this.encounter = new Encounter(this, encounter!.id, encounter!.rules!);
     }
     actor(id: number, x: number, y: number): Actor { return { id, x, y, z: this.groundHeight(x, y) + 3, vz: 0, hp: 500, maxHp: 500, qi: 100, realm: 1, cool: [0, 0, 0], aim: id ? Math.PI : 0, ward: 100, vx: 0, vy: 0, dashLeft: 0, dashCool: 0, dashX: 1, dashY: 0 }; }
     canDamage(ownerId: number, target: Actor) {
+        if (this.encounter && (!this.encounter.canAct(ownerId) || !this.encounter.canAct(target.id))) return false;
         const owner = this.actors.find(a => a.id === ownerId);
-        return !!owner && ownerId !== target.id && (owner.team === undefined || target.team === undefined || owner.team !== target.team);
+        return !!owner && hostile(owner, target);
+    }
+    techniqueEquipped(a: Actor, kind: Technique) {
+        return a.loadoutId === undefined || !!this.content.loadouts.find(l => l.id === a.loadoutId)?.slots.includes(kind);
     }
     cellAt(x: number, y: number) { return this.cells[Math.floor(y / CELL) * GRID + Math.floor(x / CELL)]; }
     groundHeight(x: number, y: number): number {
@@ -205,8 +245,9 @@ export class World {
         a.z = Math.min(65, a.z + Math.min(Math.max(0, floor - a.z), 24 * dt));
         if (floor > a.z) a.vz = Math.max(0, a.vz);
     }
-    effect(kind: string, p: Vec, radius: number, life: number, angle = 0, text?: string) { this.effects.push({ ...p, z: p.z ?? this.groundHeight(p.x, p.y), kind, radius, life, maxLife: life, angle, text }); }
+    effect(kind: string, p: Vec, radius: number, life: number, angle = 0, text?: string) { this.effects.push({ ...p, visualId: this.nextVisualId++, z: p.z ?? this.groundHeight(p.x, p.y), kind, radius, life, maxLife: life, angle, text }); }
     damage(a: Actor, raw: number) {
+        if (this.encounter && !this.encounter.canAct(a.id)) return;
         if (a.hp <= 0)
             return;
         const amount = raw / power(a.realm);
@@ -279,6 +320,7 @@ export class World {
         a.y = y;
     }
     dash(a: Actor, direction: Vec) {
+        if (this.encounter && !this.encounter.canAct(a.id)) return false;
         if (a.hp <= 0 || a.dashLeft > 0 || a.dashCool > 0 || a.qi < 10)
             return false;
         const n = Math.hypot(direction.x, direction.y);
@@ -335,13 +377,17 @@ export class World {
             this.move(a, a.vx / speed, a.vy / speed, dt, speed);
     }
     cast(a: Actor, kind: Technique, target: Aim) {
-        const i = ['bolt', 'slash', 'nova'].indexOf(kind), cost = [9, 16, 38][i];
+        if (this.encounter && !this.encounter.canAct(a.id)) return false;
+        if (!this.techniqueEquipped(a, kind)) return false;
+        const i = ['bolt', 'slash', 'nova'].indexOf(kind), definition = this.content.techniques.find(t => t.id === kind);
+        if (!definition) return false;
+        const cost = definition.cost;
         if (a.hp <= 0 || a.cool[i] > 0 || a.qi < cost)
             return false;
-        const angle = Math.atan2(target.y - a.y, target.x - a.x), p = power(a.realm);
+        const angle = Math.atan2(target.y - a.y, target.x - a.x), p = power(a.realm) * definition.powerScale;
         a.aim = angle;
         a.qi -= cost;
-        a.cool[i] = [.95, .65, 3.2][i];
+        a.cool[i] = definition.cooldown;
         if (kind === 'bolt') {
             const reach = Math.max(target.targetId !== undefined ? 4 : 16, Math.min(180, distance(a, target))), co = Math.cos(angle), si = Math.sin(angle);
             const tx = a.x + co * reach, ty = a.y + si * reach, flight = reach / 95 * 1.15;
@@ -389,9 +435,15 @@ export class World {
         if (dt <= 0 || dt > .05)
             throw Error('Use fixed small steps');
         this.time += dt;
+        const encounterEpoch = this.encounter?.epoch;
+        this.encounter?.beforeStep(dt);
+        if (this.encounter && (this.encounter.phase !== 'active' || encounterEpoch !== this.encounter.epoch)) {
+            this.sceneTime += dt; this.timeScale = 1; return;
+        }
+        const previousVitality = new Map(this.actors.map(a => [a.id, a.hp + a.ward]));
         const player = this.actors[0], enemy = this.actors[1];
         const controlled = players
-            ? this.actors.filter(a => players.has(a.id)).map(actor => ({ actor, input: players.get(actor.id)! }))
+            ? this.actors.filter(a => players.has(a.id) && (!this.encounter || this.encounter.canAct(a.id))).map(actor => ({ actor, input: players.get(actor.id)! }))
             : [{ actor: player, input }];
         for (const c of controlled) {
             this.climb(c.actor, c.input.climb ?? 0, dt);
@@ -411,6 +463,7 @@ export class World {
             a.aim = Math.atan2(command.aim.y - a.y, command.aim.x - a.x);
             if (command.fire) this.cast(a, command.fire, command.aim);
         }
+        stepEnemies(this, sceneDt);
         if (this.ai && !players?.has(enemy.id) && enemy.hp > 0 && player.hp > 0) {
             this.climb(enemy, Math.abs(player.z - enemy.z) > 1.5 ? Math.sign(player.z - enemy.z) : 0, sceneDt);
             enemy.aim = Math.atan2(player.y - enemy.y, player.x - enemy.x);
@@ -583,6 +636,7 @@ export class World {
         for (const e of this.effects)
             e.life -= sceneDt;
         this.effects = this.effects.filter(e => e.life > 0);
+        this.encounter?.afterStep(new Map(controlled.map(c => [c.actor.id, c.input])), previousVitality, dt);
     }
     saveTerrain() { return JSON.stringify({ version: 2, cells: this.cells, destroyed: this.destroyed }); }
     loadTerrain(raw: string) {

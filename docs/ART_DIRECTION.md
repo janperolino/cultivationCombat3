@@ -1,3 +1,5 @@
+> Historical browser-era reference, preserved 2026-10-25. Future edits and product decisions live in the [native version](../../cultivationGame3-Godot/new-game-project/docs/ART_DIRECTION.md) and [native roadmap](../../cultivationGame3-Godot/new-game-project/docs/IMPLEMENTATION_PLAN.md). Old technical/current-state statements below are historical.
+
 # Severed Heaven — Art Direction
 
 2026-10-24 · Visual target endorsed by the user after viewing the concept below.

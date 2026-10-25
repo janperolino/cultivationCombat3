@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { World, DT } from '../src/sim.ts';
+import { BASELINE_ENCOUNTER, SKIRMISH_ENCOUNTER } from '../src/content.ts';
 import { SessionAuthority } from '../src/session-authority.ts';
 import { ReplicationStream, PROTOCOL_VERSION, TERRAIN_SCHEMA, MAX_PACKET_BYTES, captureDisplayFrame } from '../src/replication.ts';
 
@@ -12,8 +13,22 @@ const token = () => randomBytes(24).toString('hex');
 const assets = new Map([
     ['/', ['spike.html', 'text/html']], ['/spike.html', ['spike.html', 'text/html']],
     ['/spike-client.js', ['spike-client.js', 'text/javascript']],
+    ['/study.css', ['study.css', 'text/css']],
+    ['/study-scene.js', ['study-scene.js', 'text/javascript']],
+    ['/study-camera.js', ['study-camera.js', 'text/javascript']],
+    ['/study-state.js', ['study-state.js', 'text/javascript']],
+    ['/study-view.js', ['study-view.js', 'text/javascript']],
+    ['/height-terrain.js', ['height-terrain.js', 'text/javascript']],
+    ['/depth-scene.js', ['depth-scene.js', 'text/javascript']],
+    ['/technique-visuals.js', ['technique-visuals.js', 'text/javascript']],
+    ['/impact.js', ['impact.js', 'text/javascript']],
+    ['/projection.js', ['projection.js', 'text/javascript']],
     ['/sim.js', ['sim.js', 'text/javascript']], ['/time-flow.js', ['time-flow.js', 'text/javascript']],
+    ['/content.js', ['content.js', 'text/javascript']],
+    ['/enemy-ai.js', ['enemy-ai.js', 'text/javascript']],
+    ['/encounter.js', ['encounter.js', 'text/javascript']],
     ['/targeting.js', ['targeting.js', 'text/javascript']],
+    ['/teams.js', ['teams.js', 'text/javascript']],
     ['/replication.js', ['replication.js', 'text/javascript']],
     ['/client-motion.js', ['client-motion.js', 'text/javascript']],
     ['/network-lab.js', ['network-lab.js', 'text/javascript']],
@@ -22,16 +37,11 @@ const assets = new Map([
 
 // Exported for real HTTP integration tests. Only the local host owns this World.
 export function createSpikeServer({ now = () => performance.now(), autoTick = true, scene = 'sparring' } = {}) {
-    const world = new World();
-    if (scene === 'coop') {
-        world.ai = false;
-        world.actors.forEach(a => { a.team = 1; });
-        const sentinel = world.actor(2, 256, 256);
-        Object.assign(sentinel, { team: 2, hp: 3000, maxHp: 3000, ward: 0 });
-        world.actors.push(sentinel);
-    } else if (scene !== 'sparring') throw new Error('Unknown spike scene');
+    if (!['coop', 'sparring', 'skirmish'].includes(scene)) throw new Error('Unknown spike scene');
+    const world = new World(undefined, scene === 'coop' ? BASELINE_ENCOUNTER : scene === 'skirmish' ? SKIRMISH_ENCOUNTER : undefined, scene === 'skirmish');
     const authority = new SessionAuthority(world, [0, 1]);
     const sessionId = token(), clients = new Map();
+    let started = scene !== 'skirmish';
     let globalWindow = now(), globalCount = 0;
     let timer, previous = now(), accumulator = 0, droppedTime = 0;
 
@@ -56,7 +66,7 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
         return { token: c.token, recoveryToken: c.recoveryToken, sessionId, generation: c.generation,
             actorId: c.actorId, scene, protocol: PROTOCOL_VERSION, schema: TERRAIN_SCHEMA };
     }
-    function step() { expire(); authority.step(); }
+    function step() { expire(); if (started) authority.step(); }
     function frame(clientId) {
         return captureDisplayFrame(world, authority.tick, authority.receipt(clientId), droppedTime);
     }
@@ -108,6 +118,7 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
                 if (actorId === undefined) { send(res, 409, { error: 'Both seats occupied or reserved. Use recovery, Leave explicitly, or wait for the reservation to expire.' }); return; }
                 const recoveryToken = token(), c = { recoveryToken, actorId, resumeSequence: 0 };
                 activate(c); clients.set(recoveryToken, c);
+                started = true;
                 send(res, 200, assignment(c)); return;
             }
             const secret = req.headers.authorization?.replace(/^Bearer /, '');
@@ -153,7 +164,7 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
                 authority.disconnect(c.id); clients.delete(c.recoveryToken); c.active = false;
                 send(res, 200, { left: true }); return;
             }
-            if ((path === '/api/command' || path === '/api/action') && req.method === 'POST') {
+            if ((path === '/api/command' || path === '/api/action' || path === '/api/retry') && req.method === 'POST') {
                 const body = await json(req);
                 // Recheck after asynchronous body reading: leave/expiry can race a request.
                 if (!c.active || c.token !== secret || now() - c.seen >= LEASE_MS) {
@@ -162,7 +173,7 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
                 if (!body || body.sessionId !== sessionId || Object.keys(body).some(k => !['sessionId', 'command'].includes(k))) {
                     send(res, 409, { error: 'Wrong server session' }); return;
                 }
-                const result = path === '/api/action' ? authority.submitAction(c.id, body.command) : authority.submit(c.id, body.command);
+                const result = path === '/api/retry' ? authority.retry(c.id, body.command) : path === '/api/action' ? authority.submitAction(c.id, body.command) : authority.submit(c.id, body.command);
                 if (result.accepted) c.seen = now();
                 send(res, result.accepted ? 200 : 422, { ...result, receipt: authority.receipt(c.id) }); return;
             }
@@ -192,6 +203,6 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-    const { server } = createSpikeServer({ scene: 'coop' });
+    const { server } = createSpikeServer({ scene: process.argv.includes('--encounter') ? 'skirmish' : 'coop' });
     server.listen(5174, '127.0.0.1', () => console.log('Two-client sparring: http://127.0.0.1:5174 (open in two tabs)'));
 }

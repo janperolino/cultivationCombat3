@@ -27,6 +27,8 @@ export class MotionPredictor {
         this.pending.push(sequence); this.pending = this.pending.slice(-64);
     }
     private motion(input: ActorInput) {
+        const encounter = this.authoritative?.encounter;
+        if (encounter && (encounter.phase !== 'active' || !encounter.participants.includes(this.actorId))) return;
         const a = this.actor;
         if (!a) return;
         this.world.climb(a, input.climb ?? 0, DT);
@@ -49,6 +51,9 @@ export class MotionPredictor {
     }
     reconcile(frame: DisplayFrame, capturedLocalTick: number, oneWayTicks = 0) {
         if (this.authoritative && frame.tick <= this.authoritative.tick) return false;
+        if (this.authoritative?.encounter?.epoch !== frame.encounter?.epoch) {
+            this.history = []; this.pending = []; this.clockOffset = undefined;
+        }
         const before = this.actor ? copy(this.actor) : undefined;
         this.world.actors = frame.actors.map(copy);
         this.authoritative = frame; this.lastReceiveTick = this.tick;
@@ -72,10 +77,12 @@ export class MotionPredictor {
 }
 
 export class RemoteInterpolator {
+    private epoch?: number;
     private frames: { tick: number; actors: Actor[] }[] = [];
     get size() { return this.frames.length; }
     push(frame: DisplayFrame) {
         if (frame.tick <= (this.frames.at(-1)?.tick ?? -1)) return;
+        if (this.epoch !== frame.encounter?.epoch) { this.frames = []; this.epoch = frame.encounter?.epoch; }
         this.frames.push({ tick: frame.tick, actors: frame.actors.map(copy) });
         this.frames = this.frames.slice(-32);
     }

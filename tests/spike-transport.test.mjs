@@ -30,7 +30,7 @@ async function host(t, options = {}) {
     }
     const submit = (c, sequence, input, overrides = {}) => api('command', c, {
         sessionId: c.sessionId,
-        command: { generation: c.generation, sequence, actorId: c.actorId, input, ...overrides },
+        command: { generation: c.generation, sequence, actorId: c.actorId, input, round: app.world.encounter?.epoch, ...overrides },
     });
     const replicas = new Map();
     async function observe(c) {
@@ -186,6 +186,104 @@ test('two allied HTTP clients damage the common sentinel, share scars, and recov
     const restored = (await h.observe(recovered)).data;
     assert.equal(restored.actors[2].hp, hp); assert.deepEqual(restored.cells, right.cells);
     for (let i = 0; i < 120; i++) h.step(); assert.equal(sentinel.hp, hp);
+});
+
+test('two HTTP clients share a moving enemy roster and warnings, recover it and cannot own or configure enemies', async t => {
+    const h = await host(t, { scene: 'skirmish' });
+    for (let i = 0; i < 120; i++) h.step();
+    assert.equal(h.world.time, 0, 'encounter waits for first Join');
+    assert.equal((await h.api('join', undefined, { encounterId: 'sentinel-arena' })).status, 400);
+    const a = await h.join(), b = await h.join(); assert.equal(a.scene, 'skirmish'); assert.equal(a.protocol, 7);
+    h.world.cells.forEach(c => Object.assign(c, { kind: 0, hp: 0, max: 0, elevation: 0, depth: 0 }));
+    Object.assign(h.world.actors[0], { x: 270, y: 250, z: 20 });
+    Object.assign(h.world.actors[1], { x: 290, y: 250, z: 20 });
+    h.world.actors.slice(2).forEach((e, i) => Object.assign(e, { x: 320 + i * 4, y: 250, z: 20 }));
+    h.step();
+    const left = (await h.observe(a)).data, right = (await h.observe(b)).data;
+    assert.equal(left.actors.length, 5); assert.equal(left.telegraphs.length, 3);
+    assert.deepEqual(left.actors, right.actors); assert.deepEqual(left.telegraphs, right.telegraphs);
+    assert.equal((await h.submit(a, 1, idle, { actorId: 4 })).status, 422);
+    const restoredConnection = (await resume(h, a)).data;
+    const restored = (await h.observe(restoredConnection)).data;
+    assert.deepEqual(restored.actors, left.actors); assert.deepEqual(restored.telegraphs, left.telegraphs);
+    for (let i = 0; i < 90; i++) h.step();
+    assert.ok(h.world.actors.slice(0, 2).some(p => p.hp < 500), 'telegraphed enemy attacks hit players');
+    assert.ok(h.world.actors.slice(2).every(e => e.hp === 400), 'enemies spare their allies');
+    const target = h.world.actors[4];
+    const command = { sessionId: b.sessionId, command: { generation: b.generation, sequence: 1, actorId: b.actorId,
+        round: h.world.encounter.epoch, input: { ...idle, fire: 'nova', aim: { x: target.x, y: target.y, z: target.z + .7, targetId: 4 } } } };
+    assert.equal((await h.api('action', b, command)).status, 200);
+    for (let i = 0; i < 90; i++) h.step();
+    assert.ok(target.hp < 400, 'player action can target the third enemy');
+    const live = await h.api('live', restoredConnection);
+    assert.equal(live.status, 200); assert.equal(live.data.state.actors.length, 5);
+    assert.ok(Buffer.byteLength(JSON.stringify(live.data)) <= 64 * 1024);
+});
+
+test('HTTP ally revive, recovery and epoch-bound retry preserve scars and cannot replay a reset', async t => {
+    const h = await host(t, { scene: 'skirmish' }), a = await h.join(), b = await h.join();
+    const e = h.world.encounter, p = h.world.actors[0], ally = h.world.actors[1];
+    Object.assign(ally, { x: p.x + 3, y: p.y, z: p.z, hp: 0 });
+    h.world.enemyStates.forEach(s => { s.recovery = 100; });
+    assert.equal((await h.api('retry', undefined, { sessionId: a.sessionId, command: { generation: a.generation, round: e.epoch } })).status, 401);
+    for (let i = 0; i < 120; i++) {
+        if (i % 10 === 0) assert.equal((await h.submit(a, i / 10 + 1, { ...idle, revive: true })).status, 200);
+        h.step();
+        if (i === 59) {
+            const left = (await h.observe(a)).data, right = (await h.observe(b)).data;
+            assert.equal(left.encounter.revives[0].targetId, 1);
+            assert.deepEqual(left.encounter, right.encounter);
+        }
+    }
+    assert.equal(ally.hp, 250); assert.equal(ally.qi, 50); assert.equal(ally.ward, 0);
+    const oldEpoch = e.epoch;
+    h.world.terrain(p, 10, 300); const scars = h.world.saveTerrain();
+    p.hp = 0; ally.hp = 0; h.step(); assert.equal(e.phase, 'defeated');
+    const restoredConnection = (await resume(h, b)).data;
+    const dead = (await h.observe(restoredConnection)).data;
+    assert.equal(dead.actors[1].hp, 0); assert.equal(dead.encounter.phase, 'defeated');
+    const retryBody = { sessionId: a.sessionId, command: { generation: a.generation, round: e.epoch } };
+    assert.equal((await h.api('retry', a, retryBody)).status, 200);
+    assert.equal((await h.api('retry', a, retryBody)).status, 422); assert.equal(e.attempt, 2);
+    assert.equal((await h.submit(a, 13, { ...idle, fire: 'nova' }, { round: oldEpoch })).status, 422);
+    assert.equal(p.hp, 500); assert.equal(ally.hp, 500); assert.equal(h.world.saveTerrain(), scars);
+    h.step(); assert.equal(h.world.casts.length, 0);
+    const left = (await h.observe(a)).data, right = (await h.observe(restoredConnection)).data;
+    assert.deepEqual(left.actors, right.actors); assert.deepEqual(left.encounter, right.encounter); assert.deepEqual(left.cells, right.cells);
+    assert.equal((await h.api('retry', a, { ...retryBody, command: { ...retryBody.command, round: e.epoch } })).status, 422, 'cannot reset an active encounter');
+});
+
+test('HTTP host presets enforce equipped casts and survive snapshot, reconnect and retry without client overrides', async t => {
+    const h = await host(t, { scene: 'skirmish' });
+    assert.equal((await h.api('join', undefined, { loadoutId: 'sweeping-crescent' })).status, 400);
+    const a = await h.join(), b = await h.join();
+    const left = (await h.observe(a)).data, right = (await h.observe(b)).data;
+    assert.equal(left.actors[0].loadoutId, 'seeking-volley'); assert.equal(left.actors[1].loadoutId, 'sweeping-crescent');
+    assert.deepEqual(left.loadouts, right.loadouts); assert.equal(left.loadouts.length, 2);
+    h.world.cells.forEach(c => Object.assign(c, { kind: 0, hp: 0, max: 0, depth: 0, elevation: 0 }));
+    Object.assign(h.world.actors[0], { x: 280, y: 250, z: 20 }); Object.assign(h.world.actors[1], { x: 280, y: 260, z: 20 });
+    h.world.actors.slice(2).forEach((e, i) => Object.assign(e, { x: 320 + i * 12, y: 250, z: 20 }));
+    h.world.enemyStates.forEach(s => { s.recovery = 100; });
+    const action = (c, fire, extra = {}) => h.api('action', c, { sessionId: c.sessionId, command: { generation: c.generation,
+        sequence: 1, actorId: c.actorId, round: h.world.encounter.epoch,
+        input: { ...idle, fire, aim: { x: 320, y: 250, z: 20.7, targetId: 2 } }, ...extra } });
+    assert.equal((await action(a, 'slash')).status, 422); assert.equal((await action(b, 'bolt')).status, 422);
+    assert.ok(h.world.actors.slice(0, 2).every(p => p.qi === 100 && p.cool.every(v => v === 0)));
+    assert.equal((await action(a, 'bolt', { loadoutId: 'sweeping-crescent' })).status, 422);
+    assert.equal((await h.submit(a, 1, { ...idle, team: 2 })).status, 422);
+    assert.equal((await action(a, 'bolt')).status, 200); assert.equal((await action(b, 'slash')).status, 200);
+    h.step(); assert.equal(h.world.bolts.length, 5); assert.equal(h.world.waves.length, 1);
+    for (let i = 0; i < 120; i++) h.step(); assert.ok(h.world.actors[2].hp < 400);
+    assert.ok(h.world.actors.slice(0, 2).every(p => p.hp === 500));
+    h.world.actors[1].hp = 321; const recovered = (await resume(h, b)).data;
+    const restored = (await h.observe(recovered)).data;
+    assert.equal(restored.actors[1].hp, 321); assert.equal(restored.actors[1].loadoutId, 'sweeping-crescent');
+    assert.deepEqual(restored.loadouts, left.loadouts);
+    h.world.actors.slice(0, 2).forEach(p => { p.hp = 0; }); h.step();
+    assert.equal((await h.api('retry', recovered, { sessionId: recovered.sessionId, command: { generation: recovered.generation, round: h.world.encounter.epoch } })).status, 200);
+    const retry = (await h.observe(recovered)).data;
+    assert.equal(retry.actors[0].loadoutId, 'seeking-volley'); assert.equal(retry.actors[1].loadoutId, 'sweeping-crescent');
+    assert.deepEqual(retry.loadouts, left.loadouts); assert.ok(retry.actors.slice(0, 2).every(p => p.hp === 500));
 });
 
 test('recovery rotates credentials, retries lost replies, clears queued actions and preserves state', async t => {

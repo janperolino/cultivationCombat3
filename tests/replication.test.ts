@@ -9,7 +9,7 @@ function setup() {
     const world = new World(), authority = new SessionAuthority(world, [0, 1]);
     const generation = authority.connect('alice', 0);
     const capture = (): DisplayFrame => ({ tick: authority.tick, time: world.time, revision: world.revision,
-        destroyed: world.destroyed, actors: world.actors, bolts: [], waves: [], casts: [], droppedTime: 0,
+        destroyed: world.destroyed, actors: world.actors, loadouts: [], telegraphs: [], bolts: [], waves: [], casts: [], effects: [], droppedTime: 0,
         receipt: authority.receipt('alice') });
     const stream = new ReplicationStream(world, 'session', capture), client = new ReplicaClient('session');
     return { world, authority, generation, stream, client };

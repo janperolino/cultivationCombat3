@@ -1,3 +1,5 @@
+import { actorPalette } from './study-scene.ts';
+import type { StudyScene, StudyBolt, StudyWave } from './study-scene.ts';
 import { lift } from './projection.ts';
 import type { World, Actor, Vec } from './sim.ts';
 type TrailPoint = Vec & {
@@ -8,27 +10,30 @@ type TrailPoint = Vec & {
 };
 // All glow, ribbons and hand geometry live outside the deterministic combat model.
 export class TechniqueVisuals {
-    private trails: TrailPoint[][] = [[], []];
-    clear() { this.trails = [[], []]; }
-    sample(world: World) {
+    private trails = new Map<number, TrailPoint[]>();
+    get trackedActors() { return this.trails.size; }
+    get trailPoints() { return [...this.trails.values()].reduce((n, trail) => n + trail.length, 0); }
+    clear() { this.trails.clear(); }
+    sample(world: Pick<World, 'actors' | 'time'>) {
+        for (const id of this.trails.keys()) if (!world.actors.some(a => a.id === id)) this.trails.delete(id);
         for (const a of world.actors) {
-            const trail = this.trails[a.id], last = trail.at(-1);
+            const trail = this.trails.get(a.id) ?? [], last = trail.at(-1);
             if (a.hp > 0 && (!last || Math.hypot(last.x - a.x, last.y - a.y, last.z - a.z) > .05))
                 trail.push({ x: a.x, y: a.y, z: a.z, time: world.time, dash: a.dashLeft > 0, angle: a.aim });
-            this.trails[a.id] = trail.filter(p => world.time - p.time < .55).slice(-40);
+            this.trails.set(a.id, trail.filter(p => world.time - p.time < .55).slice(-40));
         }
     }
-    flight(ctx: CanvasRenderingContext2D, world: World, actors: Actor[], zoom: number, tilted = false) {
+    flight(ctx: CanvasRenderingContext2D, world: Pick<World, 'time'>, actors: Actor[], zoom: number, tilted = false) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         for (let a of actors) {
             if (a.hp <= 0)
                 continue;
-            const trail = this.trails[a.id].map(p => { const h = lift(p.z, tilted); return { ...p, x: p.x + h.x, y: p.y + h.y }; }), color = a.id ? '#ffc389' : '#83f5e1';
+            const trail = (this.trails.get(a.id) ?? []).map(p => { const h = lift(p.z, tilted); return { ...p, x: p.x + h.x, y: p.y + h.y }; }), color = actorPalette(a).glow;
             if (trail.length > 1) {
                 const first = trail[0], last = trail.at(-1)!;
                 const gradient = ctx.createLinearGradient(first.x, first.y, last.x + .001, last.y + .001);
-                gradient.addColorStop(0, a.id ? '#ffc38900' : '#83f5e100');
+                gradient.addColorStop(0, actorPalette(a).fade);
                 gradient.addColorStop(1, color);
                 ctx.fillStyle = gradient;
                 ctx.globalAlpha = .6;
@@ -105,11 +110,11 @@ export class TechniqueVisuals {
         }
         ctx.restore();
     }
-    bolt(ctx: CanvasRenderingContext2D, b: World['bolts'][number], clock: number) {
+    bolt(ctx: CanvasRenderingContext2D, b: StudyBolt, clock: number, tint?: string) {
         ctx.save();
         ctx.translate(b.x, b.y);
         ctx.rotate(Math.atan2(b.vy, b.vx));
-        const strength = 1 + Math.log2(b.power + 1) * .18, tail = 8 * strength, color = b.owner ? '#ffb777' : '#78f9ed';
+        const strength = 1 + Math.log2(b.power + 1) * .18, tail = 8 * strength, color = tint ?? (b.owner ? '#ffb777' : '#78f9ed');
         ctx.globalCompositeOperation = 'lighter';
         const wake = ctx.createLinearGradient(-tail, 0, 1, 0);
         wake.addColorStop(0, '#73f8df00');
@@ -156,7 +161,7 @@ export class TechniqueVisuals {
         }
         ctx.restore();
     }
-    crescent(ctx: CanvasRenderingContext2D, wave: World['waves'][number]) {
+    crescent(ctx: CanvasRenderingContext2D, wave: StudyWave, tint?: string) {
         ctx.save();
         ctx.translate(wave.x, wave.y);
         ctx.rotate(wave.angle);
@@ -164,7 +169,7 @@ export class TechniqueVisuals {
         const r = wave.span, tip = 1.15;
         ctx.shadowBlur = 22;
         ctx.shadowColor = '#a3f5df';
-        ctx.fillStyle = '#bdfbe4';
+        ctx.fillStyle = tint ?? '#bdfbe4';
         ctx.beginPath();
         ctx.arc(0, 0, r, -tip, tip);
         ctx.quadraticCurveTo(r * .88, 0, Math.cos(tip) * r, -Math.sin(tip) * r);
@@ -259,7 +264,7 @@ export class TechniqueVisuals {
         ctx.stroke();
         ctx.restore();
     }
-    palms(ctx: CanvasRenderingContext2D, world: World, tilted = false) {
+    palms(ctx: CanvasRenderingContext2D, world: Pick<StudyScene, 'casts' | 'effects' | 'groundHeight'>, tilted = false) {
         for (const c of world.casts) {
             const t = 1 - c.left / .65, approach = Math.pow(1 - t, 2);
             this.palm(ctx, c.x, c.y, c.radius, .07 + t * .11, world.groundHeight(c.x, c.y), c.angle, tilted);
