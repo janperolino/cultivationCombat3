@@ -1,15 +1,10 @@
 import { World, GRID, CELL, SIZE } from './sim.ts';
-import type { Actor, ActorInput, Technique } from './sim.ts';
+import type { ActorInput, Technique } from './sim.ts';
 import { targetInRange, LOCK_RANGE } from './targeting.ts';
+import { ReplicaClient, PROTOCOL_VERSION, TERRAIN_SCHEMA } from './replication.ts';
+import type { DisplayFrame, StatePage } from './replication.ts';
 
-type Connection = { token: string; actorId: number; generation: number; sessionId: string };
-type Frame = {
-    sessionId: string; tick: number; time: number; revision: number; destroyed: number;
-    actors: Actor[]; changedCells: number[][]; droppedTime: number;
-    bolts: { x: number; y: number; z: number; owner: number; launched: boolean }[];
-    waves: { x: number; y: number; z: number; owner: number; span: number; angle: number }[];
-    casts: { x: number; y: number; z: number; owner: number; radius: number; left: number }[];
-};
+type Connection = { token: string; actorId: number; generation: number; sessionId: string; protocol: number; schema: string };
 const canvas = document.getElementById('arena') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 const join = document.getElementById('join') as HTMLButtonElement;
@@ -18,7 +13,7 @@ const status = document.getElementById('status')!;
 const readout = document.getElementById('readout')!;
 // Used only as the deterministic display baseline/height lookup. Never stepped here.
 const terrain = new World();
-let connection: Connection | undefined, frame: Frame | undefined, sequence = 0;
+let connection: Connection | undefined, frame: DisplayFrame | undefined, replica: ReplicaClient | undefined, sequence = 0;
 let joining = false, sending = false, polling = false, held = false, dash = false;
 let fire: Technique | undefined, lastFrameAt = 0, rtt = 0;
 const keys = new Set<string>(), mouse = { x: 256, y: 256 };
@@ -34,7 +29,10 @@ async function request(path: string, c?: Connection, body?: unknown) {
     });
     const data = await response.json();
     if (response.status === 401 && connection === c) disconnectLocal('Connection expired · join again.');
-    if (!response.ok) throw new Error(data.error ?? data.reason ?? 'Request rejected');
+    if (!response.ok) {
+        if (data.resync && connection === c && replica) replica.reset();
+        throw new Error(data.error ?? data.reason ?? 'Request rejected');
+    }
     return data;
 }
 function disconnectLocal(message: string) {
@@ -46,6 +44,8 @@ join.onclick = async () => {
     joining = true; join.disabled = true; status.textContent = 'Joining…';
     try {
         connection = await request('join', undefined, {});
+        if (connection!.protocol !== PROTOCOL_VERSION || connection!.schema !== TERRAIN_SCHEMA) throw new Error('Client/host versions differ · reload this page.');
+        replica = new ReplicaClient(connection!.sessionId);
         frame = undefined; sequence = 0; clearInput();
         terrain.cells = new World().cells;
         leave.disabled = false; canvas.focus();
@@ -86,7 +86,7 @@ addEventListener('keyup', event => keys.delete(event.code));
 
 async function sendInput() {
     const c = connection;
-    if (!c || !frame || sending) return;
+    if (!c || !frame || sending || !replica?.ready) return;
     sending = true;
     const actor = frame.actors.find(a => a.id === c.actorId)!;
     const target = frame.actors.find(a => targetInRange(actor, a, LOCK_RANGE) && Math.hypot(a.x - mouse.x, a.y - a.z * .25 - mouse.y) < 10);
@@ -111,12 +111,17 @@ async function poll() {
     polling = true;
     const started = performance.now();
     try {
-        const next: Frame = await request('state', c);
+        const activeReplica = replica!;
+        const next: StatePage = await request('sync', c, activeReplica.request());
         if (connection !== c) return;
-        if (next.sessionId !== c.sessionId) { disconnectLocal('Host restarted · join again.'); return; }
-        if (frame && next.tick < frame.tick) return;
-        frame = next; lastFrameAt = performance.now(); rtt = lastFrameAt - started;
-        for (const [i, kind, hp, depth, elevation] of frame.changedCells) Object.assign(terrain.cells[i], { kind, hp, depth, elevation });
+        let result;
+        try { result = activeReplica.apply(next); }
+        catch { activeReplica.reset(); clearInput(); status.textContent = 'Synchronizing arena again…'; return; }
+        lastFrameAt = performance.now(); rtt = lastFrameAt - started;
+        if (result === 'ignored') return;
+        if (result === 'partial') { status.textContent = `Synchronizing arena · ${activeReplica.progress} cells`; return; }
+        frame = activeReplica.state!;
+        terrain.cells = activeReplica.cells;
         status.textContent = `Player ${c.actorId + 1} connected · shared sparring arena`;
         draw();
     } catch (error) {
@@ -155,10 +160,12 @@ function draw() {
         ctx.fillText(`P${a.id + 1} · ${Math.round(a.hp)} hp`, a.x, y - 10);
     }
     readout.textContent = frame.actors.map(a => `P${a.id + 1}: ${Math.round(a.hp)} hp · ${Math.round(a.qi)} qi · ${a.z.toFixed(1)}m altitude${a.hp <= 0 ? ' · defeated' : ''}`).join('    ') +
-        `\nShared tick ${frame.tick} · terrain ${frame.revision} · ${frame.destroyed} cover destroyed · state round trip ${Math.round(rtt)} ms`;
+        `\nShared tick ${frame.tick} · terrain ${frame.revision} · ${frame.destroyed} cover destroyed · state round trip ${Math.round(rtt)} ms` +
+        `\nInput received ${frame.receipt.received} · applied through ${frame.receipt.applied}`;
 }
 setInterval(() => { void sendInput(); }, 1000 / 30);
-setInterval(() => { void poll(); }, 100);
+// Fill paged transfers promptly, then retain the original 10 Hz observation cadence.
+setInterval(() => { if (replica?.syncing || performance.now() - lastFrameAt >= 100) void poll(); }, 25);
 setInterval(() => {
     if (connection && lastFrameAt && performance.now() - lastFrameAt > 2000) status.textContent = 'Host unavailable · showing last received state.';
 }, 500);

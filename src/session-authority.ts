@@ -14,6 +14,7 @@ type Connection = {
     actorId: number;
     generation: number;
     sequence: number;
+    appliedSequence: number;
     acceptedThisTick: number;
     receivedTick: number;
     input?: ActorInput;
@@ -85,12 +86,17 @@ export class SessionAuthority {
         }
         if (!Number.isSafeInteger(this.nextGeneration)) throw new Error('Session generation exhausted');
         const generation = this.nextGeneration++;
-        this.connections.set(clientId, { actorId, generation, sequence: 0, acceptedThisTick: 0, receivedTick: -STALE_INPUT_TICKS });
+        this.connections.set(clientId, { actorId, generation, sequence: 0, appliedSequence: 0, acceptedThisTick: 0, receivedTick: -STALE_INPUT_TICKS });
         return generation;
     }
 
     disconnect(clientId: string): boolean {
         return this.connections.delete(clientId);
+    }
+
+    receipt(clientId: string): { received: number; applied: number } {
+        const c = this.connections.get(clientId);
+        return { received: c?.sequence ?? 0, applied: c?.appliedSequence ?? 0 };
     }
 
     submit(clientId: string, data: unknown): CommandResult {
@@ -149,6 +155,7 @@ export class SessionAuthority {
         this.currentTick++;
         for (const c of this.connections.values()) {
             c.acceptedThisTick = 0;
+            if (c.input && this.currentTick - 1 - c.receivedTick < STALE_INPUT_TICKS) c.appliedSequence = c.sequence;
             if (c.input) { delete c.input.fire; delete c.input.dash; }
         }
     }

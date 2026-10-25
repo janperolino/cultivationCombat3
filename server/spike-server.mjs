@@ -4,14 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { World, DT } from '../src/sim.ts';
 import { SessionAuthority } from '../src/session-authority.ts';
+import { ReplicationStream, PROTOCOL_VERSION, TERRAIN_SCHEMA, MAX_PACKET_BYTES } from '../src/replication.ts';
 
-export const BODY_LIMIT = 2048, FRAME_LIMIT = 4 * 1024 * 1024, LEASE_MS = 5000;
+export const BODY_LIMIT = 2048, FRAME_LIMIT = MAX_PACKET_BYTES, LEASE_MS = 5000;
 const token = () => randomBytes(24).toString('hex');
 const assets = new Map([
     ['/', ['spike.html', 'text/html']], ['/spike.html', ['spike.html', 'text/html']],
     ['/spike-client.js', ['spike-client.js', 'text/javascript']],
     ['/sim.js', ['sim.js', 'text/javascript']], ['/time-flow.js', ['time-flow.js', 'text/javascript']],
     ['/targeting.js', ['targeting.js', 'text/javascript']],
+    ['/replication.js', ['replication.js', 'text/javascript']],
 ]);
 
 // Exported for real HTTP integration tests. Only the local host owns this World.
@@ -19,7 +21,7 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
     const world = new World();
     const authority = new SessionAuthority(world, [0, 1]);
     const sessionId = token(), clients = new Map();
-    let globalWindow = now(), globalCount = 0, cachedTick = -1, cachedFrame;
+    let globalWindow = now(), globalCount = 0;
     let timer, previous = now(), accumulator = 0, droppedTime = 0;
 
     function expire() {
@@ -28,22 +30,13 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
         }
     }
     function step() { expire(); authority.step(); }
-    function frame() {
-        if (cachedTick !== authority.tick) {
-            const changedCells = [];
-            world.cells.forEach((c, i) => {
-                if (world.cellVersions[i]) changedCells.push([i, c.kind, c.hp, c.depth, c.elevation]);
-            });
-            cachedFrame = JSON.stringify({ sessionId, tick: authority.tick, time: world.time,
-                revision: world.revision, destroyed: world.destroyed, actors: world.actors,
-                bolts: world.bolts.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, launched: b.launched })),
-                waves: world.waves.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, span: b.span, angle: b.angle })),
-                casts: world.casts.map(c => ({ x: c.x, y: c.y, z: c.z, owner: c.owner, radius: c.radius, left: c.left })),
-                changedCells, droppedTime });
-            if (Buffer.byteLength(cachedFrame) > FRAME_LIMIT) throw new Error('Observation budget exceeded');
-            cachedTick = authority.tick;
-        }
-        return cachedFrame;
+    function frame(clientId) {
+        return { tick: authority.tick, time: world.time,
+            revision: world.revision, destroyed: world.destroyed, actors: world.actors,
+            bolts: world.bolts.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, launched: b.launched })),
+            waves: world.waves.map(b => ({ x: b.x, y: b.y, z: b.z, owner: b.owner, span: b.span, angle: b.angle })),
+            casts: world.casts.map(c => ({ x: c.x, y: c.y, z: c.z, owner: c.owner, radius: c.radius, left: c.left })),
+            receipt: authority.receipt(clientId), droppedTime };
     }
     function send(res, status, data) {
         res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
@@ -90,16 +83,25 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
                 const actorId = [0, 1].find(id => ![...clients.values()].some(c => c.actorId === id));
                 if (actorId === undefined) { send(res, 409, { error: 'Both seats occupied. Leave a tab or wait five seconds after closing it.' }); return; }
                 const secret = token(), id = token(), generation = authority.connect(id, actorId);
-                clients.set(secret, { id, actorId, generation, seen: now(), window: now(), count: 0 });
-                send(res, 200, { token: secret, sessionId, generation, actorId }); return;
+                clients.set(secret, { id, actorId, generation, seen: now(), window: now(), count: 0,
+                    stream: new ReplicationStream(world, sessionId, () => frame(id)) });
+                send(res, 200, { token: secret, sessionId, generation, actorId, protocol: PROTOCOL_VERSION, schema: TERRAIN_SCHEMA }); return;
             }
             const secret = req.headers.authorization?.replace(/^Bearer /, '');
             const c = clients.get(secret);
             if (!c) { send(res, 401, { error: 'Connection expired. Join again.' }); return; }
             if (now() - c.window >= 1000) { c.window = now(); c.count = 0; }
             if (++c.count > 100) { send(res, 429, { error: 'Connection ingress limit' }); return; }
-            if (path === '/api/state' && req.method === 'GET') {
-                c.seen = now(); send(res, 200, frame()); return;
+            if (path === '/api/sync' && req.method === 'POST') {
+                const body = await json(req);
+                if (clients.get(secret) !== c || now() - c.seen >= LEASE_MS) {
+                    send(res, 401, { error: 'Connection expired' }); return;
+                }
+                try {
+                    const page = c.stream.reply(body);
+                    c.seen = now(); send(res, 200, page);
+                } catch (error) { send(res, 409, { error: error.message, resync: true }); }
+                return;
             }
             if (path === '/api/leave' && req.method === 'POST') {
                 await json(req); authority.disconnect(c.id); clients.delete(secret);
@@ -116,7 +118,7 @@ export function createSpikeServer({ now = () => performance.now(), autoTick = tr
                 }
                 const result = authority.submit(c.id, body.command);
                 if (result.accepted) c.seen = now();
-                send(res, result.accepted ? 200 : 422, result); return;
+                send(res, result.accepted ? 200 : 422, { ...result, receipt: authority.receipt(c.id) }); return;
             }
             send(res, 404, { error: 'Not found' });
         } catch (error) {

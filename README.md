@@ -4,7 +4,7 @@
 
 The broader direction is a cooperative cultivation RPG about fugitives finding ruined sect grounds and founding their own sect there. See the [game design](docs/GAME_DESIGN.md), [implementation plan](docs/IMPLEMENTATION_PLAN.md), [opening chapter specification](docs/OPENING_CHAPTER.md), and [art direction with the endorsed concept](docs/ART_DIRECTION.md).
 
-The main playable build remains the solo combat study. A separate M1.P3 local two-tab sparring harness now routes commands through `SessionAuthority` and a shared host. It is a transport test with opponent damage rules, not finished cooperative gameplay. Solo `World.step` retains its existing time-dilation behavior. All 82 tests, TypeScript checking, and build pass.
+The main playable build remains the solo combat study. A separate M1.P3 local two-tab sparring harness now routes commands through `SessionAuthority` and a shared host. It is a transport test with opponent damage rules, not finished cooperative gameplay. Solo `World.step` retains its existing time-dilation behavior. All 92 tests, TypeScript checking, and build pass.
 
 A standalone TypeScript / Canvas 2D cultivation combat vertical slice. Local-only; no accounts, hosted backend, game engine, or runtime dependencies. Node.js 24.13+ recommended (uses Node's built-in TypeScript stripper).
 
@@ -35,7 +35,7 @@ Open [http://127.0.0.1:5174](http://127.0.0.1:5174) in two tabs and click **Join
 
 Click **Leave** to release a seat. Closing a tab normally releases it too; otherwise the lease expires after five seconds. A silent command stream becomes neutral after 250 ms; existing momentum/dodges/attacks finish. Actors remain in the world after leaving; restart the host for a fresh match. The host is loopback-only, with no accounts, external hosting, relay fees, or added dependencies. It does not accept LAN/internet clients.
 
-The dedicated page uses a simple overhead test view, independent of the original combat renderer and browser saves. HTTP polling intentionally exposes visible latency and may miss brief effects. No prediction, smooth remote interpolation, durable reconnect, or production terrain delta protocol is claimed. Team/friendly-fire rules remain open; the two actors can damage each other. See the [M1.P3 brief and handoff](docs/phases/M1.P3-local-transport.md).
+The dedicated page uses a simple overhead test view, independent of the original combat renderer and browser saves. HTTP polling intentionally exposes visible latency and may miss brief effects. M1.P4 now supplies versioned full join snapshots and ordered, acknowledged terrain deltas, bounded to 256 cells and 64 KiB per page. A join rebuilds all 16,384 cells before enabling input; completed terrain transfers apply atomically. Lost responses retry safely, and a sequence/revision gap starts a fresh snapshot. Input receipts show accepted and consumed sequence high-water marks, not guaranteed cast success. No prediction, smooth remote interpolation, or durable reconnect is claimed. Team/friendly-fire rules remain open; the two actors can damage each other. See the [M1.P3 transport handoff](docs/phases/M1.P3-local-transport.md) and [M1.P4 replication contract](docs/phases/M1.P4-state-replication.md).
 
 `npm test` now includes real loopback HTTP integration tests; a restricted environment must permit local server connections. `npm run build` includes the static sparring page/client, but its multiplayer API requires `npm run spike`; static hosting alone cannot run the authority.
 
