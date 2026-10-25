@@ -1,4 +1,4 @@
-> Archived browser-era evidence as of 2026-10-25. Old stack choices, current-state claims and next-step instructions below are historical. Future work follows the [native roadmap](../../cultivationGame3-Godot/new-game-project/docs/IMPLEMENTATION_PLAN.md).
+> Archived browser-era evidence as of 2026-10-25. Old stack choices, current-state claims and next-step instructions below are historical. Future work follows the [native roadmap](../../cultivationGame3-Godot/plan.md).
 
 # Current project status
 

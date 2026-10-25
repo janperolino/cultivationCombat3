@@ -1,4 +1,4 @@
-> Historical browser-era reference, preserved 2026-10-25. Future edits and product decisions live in the [native version](../../cultivationGame3-Godot/new-game-project/docs/GAME_DESIGN.md) and [native roadmap](../../cultivationGame3-Godot/new-game-project/docs/IMPLEMENTATION_PLAN.md). Old technical/current-state statements below are historical.
+> Historical browser-era reference, preserved 2026-10-25. Future edits and product decisions live in the [native version](../../cultivationGame3-Godot/new-game-project/docs/GAME_DESIGN.md) and [native roadmap](../../cultivationGame3-Godot/plan.md). Old technical/current-state statements below are historical.
 
 # Severed Heaven — Full Game Design
 

@@ -1,6 +1,6 @@
 # Browser reference status — migration selected
 
-Updated 2026-10-25. Future native work is governed by [Godot status](../../cultivationGame3-Godot/new-game-project/docs/STATUS.md), [migration](../../cultivationGame3-Godot/new-game-project/docs/MIGRATION.md) and [the sole active roadmap](../../cultivationGame3-Godot/new-game-project/docs/IMPLEMENTATION_PLAN.md).
+Updated 2026-10-25. Future native work is governed by [Godot status](../../cultivationGame3-Godot/plan.md), [migration](../../cultivationGame3-Godot/new-game-project/docs/MIGRATION.md) and [the sole active roadmap](../../cultivationGame3-Godot/plan.md).
 
 Browser M1 bounded feasibility accepted; M2.P1 content, P2 enemies/telegraphs, P3 lifecycle/revive/retry, P4 loadouts/teams and P5a study presentation complete. Guardian P5 and campaign are unimplemented. Latest handoff reports 165 tests; this validates no native GDScript. HTTP polling remains local development transport; caching/culling changes and mixed measurements do not certify production smoothness.
 

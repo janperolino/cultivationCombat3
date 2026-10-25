@@ -1,4 +1,4 @@
-> Archived browser README as of 2026-10-25. Run instructions and evidence are preserved; future product work follows the [native roadmap](../cultivationGame3-Godot/new-game-project/docs/IMPLEMENTATION_PLAN.md). Historical host URLs may no longer be live.
+> Archived browser README as of 2026-10-25. Run instructions and evidence are preserved; future product work follows the [native roadmap](../cultivationGame3-Godot/plan.md). Historical host URLs may no longer be live.
 
 # Severed Heaven — Combat Study 001
 
